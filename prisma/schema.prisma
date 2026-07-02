@@ -1,0 +1,285 @@
+// InsightApex - Prisma Schema (Phase 1)
+// Designed so Phase 2/3 features (payments, AI, certificates) can be
+// added by extending existing models rather than rewriting them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum Role {
+  STUDENT
+  ADMIN
+}
+
+enum DifficultyLevel {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum AccessLevel {
+  FREE
+  PREMIUM // TODO Phase 2: gate premium content behind purchase/subscription
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  ABANDONED
+}
+
+// Phase 2/3 placeholder enums (not used yet, kept here so schema does not
+// need restructuring later)
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  TRIALING
+}
+
+enum PurchaseType {
+  PAPER_PACK
+  QUESTION_PACK
+  SUBSCRIPTION
+}
+
+// ---------------------------------------------------------------------------
+// USERS & AUTH
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  passwordHash  String
+  role          Role     @default(STUDENT)
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Auth support structures
+  verificationTokens VerificationToken[]
+  passwordResetTokens PasswordResetToken[]
+  sessions      Session[]
+
+  // Student domain data
+  attempts      QuizAttempt[]
+  profile       StudentProfile?
+
+  // Phase 2/3 placeholders — left empty/unused in Phase 1
+  subscriptions Subscription[]
+  purchases     Purchase[]
+  certificates  Certificate[]
+
+  @@index([email])
+}
+
+model StudentProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bio         String?
+  targetExamDate DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Verification + password reset tokens (Resend-ready: token is emailed,
+// consumed once). Kept generic so they work for any email provider.
+model VerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+}
+
+// Auth.js session/account tables (kept minimal; JWT strategy is default,
+// but DB session table is included for future flexibility)
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expires      DateTime
+}
+
+// ---------------------------------------------------------------------------
+// ACCA CONTENT STRUCTURE
+// ---------------------------------------------------------------------------
+
+model Paper {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g. "FA1", "PM", "SBR"
+  title       String
+  description String?
+  accessLevel AccessLevel @default(FREE) // TODO Phase 2: PREMIUM papers require purchase/subscription
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  topics      Topic[]
+  attempts    QuizAttempt[]
+
+  // Phase 2 placeholder: paper-specific purchase packs
+  purchases   Purchase[]
+}
+
+model Topic {
+  id          String   @id @default(cuid())
+  paperId     String
+  paper       Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  questions   Question[]
+
+  @@index([paperId])
+}
+
+model Question {
+  id            String   @id @default(cuid())
+  topicId       String
+  topic         Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  text          String
+  explanation   String?
+  difficulty    DifficultyLevel @default(MEDIUM)
+  marks         Int      @default(1)
+  imageUrl      String?  // Cloudflare R2-ready: stores public object URL
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  options       AnswerOption[]
+  responses     QuestionResponse[]
+
+  @@index([topicId])
+}
+
+model AnswerOption {
+  id          String   @id @default(cuid())
+  questionId  String
+  question    Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  text        String
+  isCorrect   Boolean  @default(false)
+  order       Int      @default(0)
+
+  responses   QuestionResponse[]
+
+  @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
+// QUIZ ATTEMPTS & RESULTS
+// ---------------------------------------------------------------------------
+
+model QuizAttempt {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paperId      String
+  paper        Paper    @relation(fields: [paperId], references: [id])
+  status       AttemptStatus @default(IN_PROGRESS)
+  startedAt    DateTime @default(now())
+  submittedAt  DateTime?
+  durationSec  Int?     // timer support
+  totalQuestions Int    @default(0)
+  correctCount Int      @default(0)
+  wrongCount   Int      @default(0)
+  scorePercent Float?
+  passed       Boolean?
+
+  responses    QuestionResponse[]
+
+  // Phase 3 placeholder
+  certificate  Certificate?
+
+  @@index([userId])
+  @@index([paperId])
+}
+
+model QuestionResponse {
+  id              String   @id @default(cuid())
+  attemptId       String
+  attempt         QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId      String
+  question        Question @relation(fields: [questionId], references: [id])
+  selectedOptionId String?
+  selectedOption  AnswerOption? @relation(fields: [selectedOptionId], references: [id])
+  isCorrect       Boolean  @default(false)
+  markedForReview Boolean  @default(false)
+  answeredAt      DateTime?
+
+  @@index([attemptId])
+  @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 2/3 PLACEHOLDER MODELS
+// Not used by any Phase 1 UI. Included now so future work only adds
+// service/UI code instead of altering the schema and migrations.
+// ---------------------------------------------------------------------------
+
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    SubscriptionStatus
+  // TODO Phase 2: Stripe fields
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Purchase {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        PurchaseType
+  paperId     String?
+  paper       Paper?   @relation(fields: [paperId], references: [id])
+  // TODO Phase 2: Stripe payment intent / checkout session reference
+  stripePaymentId String?
+  amountCents Int?
+  currency    String?  @default("usd")
+  createdAt   DateTime @default(now())
+}
+
+model Certificate {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attemptId   String   @unique
+  attempt     QuizAttempt @relation(fields: [attemptId], references: [id])
+  // TODO Phase 3: PDF generation + R2 storage URL
+  fileUrl     String?
+  issuedAt    DateTime @default(now())
+}
