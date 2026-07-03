@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuthApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { hasPaperAccess } from "@/services/access-control";
 
 export async function GET(_req: Request, { params }: { params: { paperId: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAuthApi();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const hasAccess = await hasPaperAccess(user.id, params.paperId);
+  if (!hasAccess) {
+    return NextResponse.json(
+      { error: "Upgrade required to access this paper.", code: "ACCESS_DENIED", upgradeUrl: "/dashboard/pricing" },
+      { status: 403 }
+    );
+  }
 
   const topics = await prisma.topic.findMany({
     where: { paperId: params.paperId, isActive: true },
@@ -19,7 +27,7 @@ export async function GET(_req: Request, { params }: { params: { paperId: string
     },
   });
 
-  const mapped = topics.map((t: typeof topics[0]) => ({
+  const mapped = topics.map((t) => ({
     id: t.id,
     title: t.title,
     description: t.description,

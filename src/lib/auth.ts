@@ -34,31 +34,29 @@ export const authOptions: NextAuthOptions = {
         const isValid = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!isValid) return null;
 
-        // Require verified email before allowing login (structure only —
-        // verification flow itself is implemented in /api/auth/verify)
-        // if (!user.emailVerified) throw new Error("EMAIL_NOT_VERIFIED");
+        if (!user.emailVerified) throw new Error("EMAIL_NOT_VERIFIED");
 
         return {
           id: user.id,
           name: user.name,
           email: user.email,
           role: user.role,
-        } as any;
+        };
       },
     }),
   ],
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id = (user as any).id;
-        token.role = (user as any).role;
+        token.id = user.id;
+        token.role = user.role;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        (session.user as any).id = token.id;
-        (session.user as any).role = token.role;
+        session.user.id = token.id;
+        session.user.role = token.role;
       }
       return session;
     },

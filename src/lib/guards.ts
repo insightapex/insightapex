@@ -15,13 +15,13 @@ export async function getCurrentUser() {
 export async function requireStudent() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  if ((user as { role?: string }).role === "ADMIN") redirect("/admin");
+  if (user.role === "ADMIN") redirect("/admin");
   return user;
 }
 
 export async function requireAdmin() {
   const user = await getCurrentUser();
   if (!user) redirect("/admin/login");
-  if ((user as any).role !== "ADMIN") redirect("/admin/login");
+  if (user.role !== "ADMIN") redirect("/admin/login");
   return user;
 }

@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuthApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { hasPaperAccess } from "@/services/access-control";
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAuthApi();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const papers = await prisma.paper.findMany({
     where: { isActive: true },
@@ -15,13 +15,23 @@ export async function GET() {
     },
   });
 
+  const accessResults = await Promise.all(
+    papers.map(async (p) => ({
+      paper: p,
+      hasAccess: await hasPaperAccess(user.id, p.id),
+    }))
+  );
+
   return NextResponse.json(
-    papers.map((p: typeof papers[0]) => ({
+    accessResults.map(({ paper: p, hasAccess }) => ({
       id: p.id,
       code: p.code,
       title: p.title,
       description: p.description,
       accessLevel: p.accessLevel,
+      isPremium: p.isPremium,
+      hasAccess,
+      isLocked: !hasAccess,
       topicCount: p._count.topics,
     }))
   );

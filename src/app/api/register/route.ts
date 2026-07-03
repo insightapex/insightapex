@@ -3,9 +3,19 @@ import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { registerSchema } from "@/lib/validation";
-import { sendVerificationEmail } from "@/services/email";
+import { sendVerificationEmail, EmailServiceError } from "@/services/email";
+import {
+  AUTH_RATE_LIMIT,
+  checkRateLimit,
+  getClientIp,
+  rateLimitResponse,
+} from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
+  const ip = getClientIp(req);
+  const rate = checkRateLimit(`register:${ip}`, AUTH_RATE_LIMIT);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfterSec!);
+
   try {
     const body = await req.json();
     const parsed = registerSchema.safeParse(body);
@@ -45,7 +55,24 @@ export async function POST(req: Request) {
         expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24), // 24h
       },
     });
-    await sendVerificationEmail(user.email, token);
+
+    try {
+      await sendVerificationEmail(user.email, token);
+    } catch (emailErr) {
+      await prisma.verificationToken.deleteMany({ where: { userId: user.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+
+      if (emailErr instanceof EmailServiceError) {
+        return NextResponse.json(
+          { error: emailErr.message },
+          { status: emailErr.code === "MISSING_CONFIG" ? 503 : 502 }
+        );
+      }
+      return NextResponse.json(
+        { error: "Could not send verification email. Please try again later." },
+        { status: 502 }
+      );
+    }
 
     return NextResponse.json({ success: true }, { status: 201 });
   } catch (err) {

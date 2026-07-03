@@ -2,15 +2,25 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import { PracticeOptionsModal, type PracticeStartOptions } from "@/components/dashboard/PracticeOptionsModal";
 import { useTimer } from "@/hooks/useTimer";
 import type { ReviewMode } from "@/lib/practice";
 import { cn } from "@/lib/utils";
 
-interface Paper { id: string; code: string; title: string; topicCount: number; }
+interface Paper {
+  id: string;
+  code: string;
+  title: string;
+  topicCount: number;
+  isPremium?: boolean;
+  isLocked?: boolean;
+  hasAccess?: boolean;
+}
 interface Topic { id: string; title: string; questionCount: number; }
 interface QuizOption { id: string; text: string; }
 interface QuizQuestion {
@@ -54,6 +64,11 @@ export default function QuizPage() {
   }, []);
 
   async function selectPaper(paper: Paper) {
+    if (paper.isLocked) {
+      router.push("/dashboard/pricing");
+      return;
+    }
+
     setSelectedPaper(paper);
     setTopics([]);
     setTotalQuestionCount(0);
@@ -123,6 +138,10 @@ export default function QuizPage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (data.code === "ACCESS_DENIED") {
+          router.push(data.upgradeUrl ?? "/dashboard/pricing");
+          return;
+        }
         setStartError(data.error ?? "Could not start practice session.");
         return;
       }
@@ -179,14 +198,38 @@ export default function QuizPage() {
             <button
               key={p.id}
               onClick={() => selectPaper(p)}
-              className="rounded-xl border border-slate-200 bg-white p-5 text-left shadow-card transition-all hover:border-brand-300 hover:shadow-panel"
+              className={cn(
+                "relative rounded-xl border bg-white p-5 text-left shadow-card transition-all",
+                p.isLocked
+                  ? "border-slate-200 hover:border-amber-300"
+                  : "border-slate-200 hover:border-brand-300 hover:shadow-panel"
+              )}
             >
+              {p.isLocked && (
+                <span className="absolute right-3 top-3">
+                  <Badge tone="warning">🔒 Locked</Badge>
+                </span>
+              )}
+              {p.isPremium && !p.isLocked && (
+                <span className="absolute right-3 top-3">
+                  <Badge tone="brand">Premium</Badge>
+                </span>
+              )}
               <div className="text-2xl font-bold text-brand-600">{p.code}</div>
               <div className="mt-1 text-sm font-medium text-slate-800">{p.title}</div>
               <div className="mt-2 text-xs text-slate-400">{p.topicCount} topics</div>
+              {p.isLocked && (
+                <p className="mt-2 text-xs font-medium text-amber-600">Upgrade to unlock</p>
+              )}
             </button>
           ))}
         </div>
+        <p className="text-center text-sm text-slate-500">
+          Need premium access?{" "}
+          <Link href="/dashboard/pricing" className="font-medium text-brand-600 hover:text-brand-700">
+            View pricing
+          </Link>
+        </p>
       </div>
     );
   }

@@ -9,6 +9,14 @@ import { ContinuePracticeCard } from "@/components/dashboard/ContinuePracticeCar
 import { WeakTopicItem } from "@/components/dashboard/WeakTopicItem";
 import { RecommendedPracticeItem } from "@/components/dashboard/RecommendedPracticeItem";
 import { EmptyState } from "@/components/dashboard/EmptyState";
+import {
+  IconAttempts,
+  IconScore,
+  IconCompleted,
+  IconTrophy,
+  IconTarget,
+  IconStreak,
+} from "@/components/dashboard/DashboardIcons";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { DashboardOverview } from "@/types";
@@ -16,13 +24,13 @@ import type { DashboardOverview } from "@/types";
 function DashboardSkeleton() {
   return (
     <div className="space-y-8 animate-pulse">
-      <div className="h-36 rounded-xl2 bg-slate-200" />
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+      <div className="h-40 rounded-2xl bg-slate-200" />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {[...Array(6)].map((_, i) => (
-          <div key={i} className="h-28 rounded-xl2 bg-slate-200" />
+          <div key={i} className="h-24 rounded-2xl bg-slate-200" />
         ))}
       </div>
-      <div className="h-64 rounded-xl2 bg-slate-200" />
+      <div className="h-48 rounded-2xl bg-slate-200" />
     </div>
   );
 }
@@ -30,6 +38,8 @@ function DashboardSkeleton() {
 function scrollToSection(sectionId: string) {
   document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+const trendLabel = "vs last 30 days";
 
 export default function DashboardClient() {
   const [data, setData] = useState<DashboardOverview | null>(null);
@@ -59,6 +69,7 @@ export default function DashboardClient() {
   const hasAttempts = (data?.totalAttempts ?? 0) > 0;
   const focusTopics = data?.topicDetails?.filter((t) => t.status === "Weak") ?? [];
   const displayTopics = focusTopics.length > 0 ? focusTopics : (data?.topicDetails?.slice(0, 5) ?? []);
+  const trends = data?.trends;
 
   return (
     <div className="space-y-8">
@@ -68,51 +79,76 @@ export default function DashboardClient() {
       />
 
       <section>
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-400">
-          Your Stats
-        </h2>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-          <StatCard label="Total Attempts" value={data?.totalAttempts ?? 0} icon="📋" tone="brand" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <StatCard
+            label="Total Attempts"
+            value={data?.totalAttempts ?? 0}
+            icon={<IconAttempts className="h-6 w-6" />}
+            tone="blue"
+            trend={
+              trends?.attempts != null
+                ? { value: trends.attempts, label: trendLabel }
+                : undefined
+            }
+          />
           <StatCard
             label="Average Score"
             value={`${avg}%`}
-            tone={avg >= 50 ? "success" : "warning"}
-            sub={avg >= 50 ? "Above pass mark" : "Below pass mark"}
-            icon="📊"
+            icon={<IconScore className="h-6 w-6" />}
+            tone="green"
+            trend={
+              trends?.averageScore != null
+                ? { value: trends.averageScore, label: trendLabel }
+                : undefined
+            }
+            sub={
+              trends?.averageScore == null
+                ? avg >= 50
+                  ? "Above pass mark"
+                  : "Below pass mark"
+                : undefined
+            }
           />
-          <StatCard label="Quizzes Completed" value={data?.completedQuizzes ?? 0} icon="✅" />
+          <StatCard
+            label="Quizzes Completed"
+            value={data?.completedQuizzes ?? 0}
+            icon={<IconCompleted className="h-6 w-6" />}
+            tone="purple"
+            trend={
+              trends?.completedQuizzes != null
+                ? { value: trends.completedQuizzes, label: trendLabel }
+                : undefined
+            }
+          />
           <StatCard
             label="Best Score"
             value={hasAttempts ? `${data?.bestScore ?? 0}%` : "—"}
-            tone={(data?.bestScore ?? 0) >= 50 ? "success" : "default"}
+            icon={<IconTrophy className="h-6 w-6" />}
+            tone="amber"
             sub={hasAttempts ? "Personal best" : "Complete a quiz"}
-            icon="🏆"
           />
           <StatCard
             label="Weak Topics"
             value={data?.weakTopicCount ?? 0}
-            sub="Need attention"
-            tone="warning"
-            icon="🎯"
+            icon={<IconTarget className="h-6 w-6" />}
+            tone="red"
+            sub="Focus to improve"
           />
           <StatCard
             label="Study Streak"
-            value={hasAttempts ? `${data?.studyStreak ?? 0} days` : "0 days"}
-            sub={hasAttempts ? "Keep it going!" : "Start practising"}
-            tone={(data?.studyStreak ?? 0) >= 3 ? "success" : "brand"}
-            icon="🔥"
+            value={hasAttempts ? `${data?.studyStreak ?? 0} Days` : "0 Days"}
+            icon={<IconStreak className="h-6 w-6" />}
+            tone="orange"
+            sub={hasAttempts ? "🔥 Keep it up!" : "Start practising"}
           />
         </div>
       </section>
 
       <section>
-        <div className="mb-4 flex items-end justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-ink-900">Continue Practice</h2>
-            <p className="mt-0.5 text-sm text-slate-500">Pick up where you left off on your ACCA papers.</p>
-          </div>
-          <Link href="/dashboard/quiz" className="hidden text-sm font-medium text-brand-600 hover:text-brand-700 sm:block">
-            View all →
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h2 className="text-lg font-semibold text-ink-900">Continue Practice</h2>
+          <Link href="/dashboard/quiz" className="text-sm font-medium text-brand-600 hover:text-brand-700">
+            View all
           </Link>
         </div>
 
@@ -125,21 +161,19 @@ export default function DashboardClient() {
             />
           </Card>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {data.paperProgress.map((paper) => (
-              <ContinuePracticeCard key={paper.id} paper={paper} />
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {data.paperProgress.map((paper, i) => (
+              <ContinuePracticeCard key={paper.id} paper={paper} index={i} />
             ))}
           </div>
         )}
       </section>
 
       <section id="progress" className="scroll-mt-6">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-ink-900">Score History</h2>
-              <p className="mt-0.5 text-sm text-slate-500">Recent quiz scores and your trend over time.</p>
-            </div>
+        <Card className="rounded-2xl">
+          <CardHeader>
+            <h2 className="text-lg font-semibold text-ink-900">Score History</h2>
+            <p className="mt-0.5 text-sm text-slate-500">Recent quiz scores and your trend over time.</p>
           </CardHeader>
           <CardBody>
             <ScoreChart data={data?.scoreHistory ?? []} />
@@ -149,7 +183,7 @@ export default function DashboardClient() {
 
       <div className="grid gap-6 xl:grid-cols-2">
         <section id="weak-topics" className="scroll-mt-6">
-          <Card className="h-full">
+          <Card className="h-full rounded-2xl">
             <CardHeader>
               <h2 className="text-lg font-semibold text-ink-900">Weak Topics</h2>
               <p className="mt-0.5 text-sm text-slate-500">Focus on areas where your accuracy needs improvement.</p>
@@ -160,7 +194,7 @@ export default function DashboardClient() {
                   compact
                   icon="🎯"
                   title="No topics analysed yet"
-                  description="No quiz history yet. Start your first practice to see your weak areas."
+                  description="Start your first practice to see your weak areas."
                   actionLabel="Start Practice"
                   actionHref="/dashboard/quiz"
                 />
@@ -183,7 +217,7 @@ export default function DashboardClient() {
         </section>
 
         <section>
-          <Card className="h-full">
+          <Card className="h-full rounded-2xl">
             <CardHeader>
               <h2 className="text-lg font-semibold text-ink-900">Recent Activity</h2>
               <p className="mt-0.5 text-sm text-slate-500">Your latest quiz attempts at a glance.</p>
@@ -194,7 +228,7 @@ export default function DashboardClient() {
                   compact
                   icon="📝"
                   title="No activity yet"
-                  description="No quiz history yet. Start your first practice to see your progress."
+                  description="Start your first practice to see your progress."
                   actionLabel="Start Practice"
                   actionHref="/dashboard/quiz"
                 />
@@ -235,7 +269,7 @@ export default function DashboardClient() {
       </div>
 
       <section>
-        <Card>
+        <Card className="rounded-2xl">
           <CardHeader>
             <h2 className="text-lg font-semibold text-ink-900">Recommended Practice</h2>
             <p className="mt-0.5 text-sm text-slate-500">
@@ -250,7 +284,7 @@ export default function DashboardClient() {
                 title={hasAttempts ? "No recommendations right now" : "Get personalised recommendations"}
                 description={
                   hasAttempts
-                    ? "You're doing well across all topics. Keep practising to maintain your edge."
+                    ? "You're doing well across all topics. Keep practising!"
                     : "Complete a few practice quizzes and we'll suggest topics to focus on."
                 }
                 actionLabel={hasAttempts ? undefined : "Start Practice"}

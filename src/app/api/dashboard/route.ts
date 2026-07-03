@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuthApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 
 type TopicStatus = "Weak" | "Average" | "Strong";
@@ -37,12 +36,33 @@ function computeStudyStreak(dates: Date[]): number {
   return streak;
 }
 
-export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+function percentChange(current: number, previous: number): number | null {
+  if (current === 0 && previous === 0) return null;
+  if (previous === 0) return 100;
+  return Math.round(((current - previous) / previous) * 1000) / 10;
+}
 
-  const userId = (session.user as { id: string }).id;
-  const studentName = session.user.name ?? "Student";
+function splitAttemptsByPeriod<T extends { submittedAt: Date | null }>(attempts: T[]) {
+  const now = Date.now();
+  const ms30 = 30 * 24 * 60 * 60 * 1000;
+  const recent: T[] = [];
+  const previous: T[] = [];
+
+  for (const a of attempts) {
+    if (!a.submittedAt) continue;
+    const age = now - a.submittedAt.getTime();
+    if (age <= ms30) recent.push(a);
+    else if (age <= ms30 * 2) previous.push(a);
+  }
+  return { recent, previous };
+}
+
+export async function GET() {
+  const user = await requireAuthApi();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const userId = user.id;
+  const studentName = user.name ?? "Student";
 
   const attempts = await prisma.quizAttempt.findMany({
     where: { userId, status: "SUBMITTED" },
@@ -182,6 +202,22 @@ export async function GET() {
       paper: a.paper.code,
     }));
 
+  const { recent, previous } = splitAttemptsByPeriod(attempts);
+  const recentAvg =
+    recent.length > 0
+      ? recent.reduce((s, a) => s + (a.scorePercent ?? 0), 0) / recent.length
+      : 0;
+  const prevAvg =
+    previous.length > 0
+      ? previous.reduce((s, a) => s + (a.scorePercent ?? 0), 0) / previous.length
+      : 0;
+
+  const trends = {
+    attempts: percentChange(recent.length, previous.length),
+    averageScore: percentChange(Math.round(recentAvg), Math.round(prevAvg)),
+    completedQuizzes: percentChange(recent.length, previous.length),
+  };
+
   return NextResponse.json({
     studentName,
     totalAttempts,
@@ -196,5 +232,6 @@ export async function GET() {
     recommendedPractice,
     recentActivity,
     scoreHistory,
+    trends,
   });
 }

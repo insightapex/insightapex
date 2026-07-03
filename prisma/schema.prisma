@@ -50,6 +50,50 @@ enum PurchaseType {
   PAPER_PACK
   QUESTION_PACK
   SUBSCRIPTION
+  MOCK_EXAM
+  ONE_TIME_PAPER
+  ONE_TIME_MOCK_EXAM
+}
+
+enum MockExamStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum BillingAccessType {
+  FREE
+  MONTHLY_SUBSCRIPTION
+  YEARLY_SUBSCRIPTION
+  ONE_TIME_PAPER
+  ONE_TIME_MOCK_EXAM
+  ADMIN_GRANTED
+}
+
+enum PlanBillingInterval {
+  MONTHLY
+  YEARLY
+  ONE_TIME
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+  CANCELED
+}
+
+enum ProductType {
+  SUBSCRIPTION_PLAN
+  PAPER
+  MOCK_EXAM
+  QUESTION_PACK
+}
+
+enum UserAccessStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +108,7 @@ model User {
   role          Role     @default(STUDENT)
   emailVerified DateTime?
   image         String?
+  stripeCustomerId String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -79,9 +124,12 @@ model User {
   // Phase 2/3 placeholders — left empty/unused in Phase 1
   subscriptions Subscription[]
   purchases     Purchase[]
+  payments      Payment[]
+  userAccess    UserAccess[]
   certificates  Certificate[]
 
   @@index([email])
+  @@index([stripeCustomerId])
 }
 
 model StudentProfile {
@@ -135,6 +183,9 @@ model Paper {
   title       String
   description String?
   accessLevel AccessLevel @default(FREE) // TODO Phase 2: PREMIUM papers require purchase/subscription
+  isPremium   Boolean  @default(false)
+  priceCents  Int?
+  currency    String?  @default("USD")
   isActive    Boolean  @default(true)
   order       Int      @default(0)
   createdAt   DateTime @default(now())
@@ -142,9 +193,12 @@ model Paper {
 
   topics      Topic[]
   attempts    QuizAttempt[]
+  mockExams   MockExam[]
 
   // Phase 2 placeholder: paper-specific purchase packs
   purchases   Purchase[]
+  products    Product[]
+  userAccess  UserAccess[]
 }
 
 model Topic {
@@ -178,6 +232,7 @@ model Question {
 
   options       AnswerOption[]
   responses     QuestionResponse[]
+  mockExamLinks MockExamQuestion[]
 
   @@index([topicId])
 }
@@ -205,6 +260,8 @@ model QuizAttempt {
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   paperId      String
   paper        Paper    @relation(fields: [paperId], references: [id])
+  mockExamId   String?
+  mockExam     MockExam? @relation(fields: [mockExamId], references: [id], onDelete: SetNull)
   status       AttemptStatus @default(IN_PROGRESS)
   startedAt    DateTime @default(now())
   submittedAt  DateTime?
@@ -222,6 +279,52 @@ model QuizAttempt {
 
   @@index([userId])
   @@index([paperId])
+  @@index([mockExamId])
+}
+
+// ---------------------------------------------------------------------------
+// MOCK EXAMS (admin-defined question sets — distinct from random practice)
+// ---------------------------------------------------------------------------
+
+model MockExam {
+  id              String         @id @default(cuid())
+  paperId         String
+  paper           Paper          @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  durationMinutes Int            @default(40)
+  passMarkPercent Float          @default(50)
+  order           Int            @default(0)
+  status          MockExamStatus @default(DRAFT)
+  accessLevel     AccessLevel    @default(FREE)
+  isPremium       Boolean        @default(false)
+  priceCents      Int?
+  currency        String?        @default("USD")
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  questions       MockExamQuestion[]
+  attempts        QuizAttempt[]
+  purchases       Purchase[]
+  products        Product[]
+  userAccess      UserAccess[]
+
+  @@index([paperId])
+  @@index([status, isActive])
+}
+
+model MockExamQuestion {
+  id         String   @id @default(cuid())
+  mockExamId String
+  mockExam   MockExam @relation(fields: [mockExamId], references: [id], onDelete: Cascade)
+  questionId String
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  order      Int      @default(0)
+
+  @@unique([mockExamId, questionId])
+  @@index([mockExamId])
+  @@index([questionId])
 }
 
 model QuestionResponse {
@@ -241,36 +344,159 @@ model QuestionResponse {
 }
 
 // ---------------------------------------------------------------------------
-// PHASE 2/3 PLACEHOLDER MODELS
-// Not used by any Phase 1 UI. Included now so future work only adds
-// service/UI code instead of altering the schema and migrations.
+// PHASE 2/3 BILLING & ACCESS (structure only — no payment UI in Phase 1)
 // ---------------------------------------------------------------------------
 
+model Plan {
+  id                   String              @id @default(cuid())
+  name                 String
+  slug                 String              @unique
+  description          String?
+  accessType           BillingAccessType
+  priceCents           Int
+  currency             String              @default("GBP")
+  billingInterval      PlanBillingInterval
+  features             String[]            @default([])
+  isActive             Boolean             @default(true)
+  provider             String?
+  providerProductId    String?
+  providerPriceId      String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  subscriptions        Subscription[]
+  products             Product[]
+}
+
+model Product {
+  id              String            @id @default(cuid())
+  name            String
+  slug            String            @unique
+  description     String?
+  type            ProductType
+  accessType      BillingAccessType @default(FREE)
+  isPremium       Boolean           @default(false)
+  priceCents      Int?
+  currency        String?           @default("GBP")
+  isActive        Boolean           @default(true)
+  planId          String?
+  plan            Plan?             @relation(fields: [planId], references: [id], onDelete: SetNull)
+  paperId         String?
+  paper           Paper?            @relation(fields: [paperId], references: [id], onDelete: SetNull)
+  mockExamId      String?
+  mockExam        MockExam?         @relation(fields: [mockExamId], references: [id], onDelete: SetNull)
+  provider        String?
+  providerProductId String?
+  providerPriceId String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  purchases       Purchase[]
+}
+
 model Subscription {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status    SubscriptionStatus
-  // TODO Phase 2: Stripe fields
-  stripeCustomerId     String?
-  stripeSubscriptionId String?
-  currentPeriodEnd     DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                     String             @id @default(cuid())
+  userId                 String
+  user                   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId                 String?
+  plan                   Plan?              @relation(fields: [planId], references: [id], onDelete: SetNull)
+  status                 SubscriptionStatus
+  accessType             BillingAccessType  @default(MONTHLY_SUBSCRIPTION)
+  priceCents             Int?
+  currency               String?            @default("GBP")
+  startsAt               DateTime?
+  endsAt                 DateTime?
+  provider               String?
+  providerCustomerId     String?
+  providerSubscriptionId String?
+  stripeCustomerId       String?
+  stripeSubscriptionId   String?
+  currentPeriodEnd       DateTime?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  payments               Payment[]
+  userAccess             UserAccess[]
+
+  @@index([userId])
+  @@index([stripeSubscriptionId])
+  @@index([stripeCustomerId])
 }
 
 model Purchase {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type        PurchaseType
-  paperId     String?
-  paper       Paper?   @relation(fields: [paperId], references: [id])
-  // TODO Phase 2: Stripe payment intent / checkout session reference
-  stripePaymentId String?
-  amountCents Int?
-  currency    String?  @default("usd")
-  createdAt   DateTime @default(now())
+  id                String            @id @default(cuid())
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId         String?
+  product           Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)
+  type              PurchaseType
+  accessType        BillingAccessType @default(FREE)
+  paperId           String?
+  paper             Paper?            @relation(fields: [paperId], references: [id], onDelete: SetNull)
+  mockExamId        String?
+  mockExam          MockExam?         @relation(fields: [mockExamId], references: [id], onDelete: SetNull)
+  status            PaymentStatus     @default(PENDING)
+  amountCents       Int?
+  currency          String?           @default("GBP")
+  provider          String?
+  providerPaymentId String?
+  stripePaymentId   String?
+  startsAt          DateTime?
+  endsAt            DateTime?
+  createdAt         DateTime          @default(now())
+
+  payments          Payment[]
+  userAccess        UserAccess[]
+
+  @@index([userId])
+  @@index([stripePaymentId])
+  @@index([status])
+}
+
+model Payment {
+  id                String         @id @default(cuid())
+  userId            String
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  purchaseId        String?
+  purchase          Purchase?      @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  subscriptionId    String?
+  subscription      Subscription?  @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  amountCents       Int
+  currency          String         @default("GBP")
+  status            PaymentStatus  @default(PENDING)
+  provider          String?
+  providerPaymentId String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([userId])
+}
+
+model UserAccess {
+  id             String            @id @default(cuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessType     BillingAccessType @default(FREE)
+  paperId        String?
+  paper          Paper?            @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  mockExamId     String?
+  mockExam       MockExam?         @relation(fields: [mockExamId], references: [id], onDelete: Cascade)
+  questionId     String?
+  status         UserAccessStatus  @default(ACTIVE)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  grantedById    String?
+  purchaseId     String?
+  purchase       Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull)
+  subscriptionId String?
+  subscription   Subscription?     @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([userId, status])
+  @@index([paperId])
+  @@index([mockExamId])
 }
 
 model Certificate {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -25,7 +25,7 @@ interface ResultData {
   review: ReviewItem[];
 }
 
-export default function ResultPage() {
+function ResultContent() {
   const params = useSearchParams();
   const attemptId = params.get("attemptId");
   const [data, setData] = useState<ResultData | null>(null);
@@ -187,5 +187,19 @@ export default function ResultPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+export default function ResultPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-64 items-center justify-center text-sm text-slate-400">
+          Loading results…
+        </div>
+      }
+    >
+      <ResultContent />
+    </Suspense>
   );
 }

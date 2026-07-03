@@ -94,6 +94,11 @@ export interface DashboardOverview {
   recommendedPractice: DashboardRecommendedPractice[];
   recentActivity: DashboardRecentActivity[];
   scoreHistory: { date: string; score: number; paper: string }[];
+  trends?: {
+    attempts: number | null;
+    averageScore: number | null;
+    completedQuizzes: number | null;
+  };
 }
 
 // Future-ready (not used in Phase 1 UI yet)

@@ -1,16 +1,10 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAdminApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { adminQuestionSchema } from "@/lib/validation/admin-question";
 
-const isAdmin = async () => {
-  const s = await getServerSession(authOptions);
-  return s?.user && (s.user as any).role === "ADMIN";
-};
-
 export async function GET(req: Request) {
-  if (!await isAdmin()) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!(await requireAdminApi())) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const url = new URL(req.url);
   const paperId = url.searchParams.get("paperId");
@@ -44,7 +38,7 @@ export async function GET(req: Request) {
 const questionSchema = adminQuestionSchema;
 
 export async function POST(req: Request) {
-  if (!await isAdmin()) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!(await requireAdminApi())) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await req.json();
   const parsed = questionSchema.safeParse(body);

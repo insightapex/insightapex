@@ -41,7 +41,11 @@ export default function RegisterPage() {
   if (success) {
     return (
       <AuthLayout title="Check your email" subtitle="We've sent a verification link to your inbox.">
-        <p className="text-sm text-slate-600">Redirecting you to login…</p>
+        <p className="text-sm text-slate-600">
+          Open the email from InsightApex and click <strong>Verify email address</strong>. Check your spam folder if
+          you don&apos;t see it within a few minutes.
+        </p>
+        <p className="mt-3 text-sm text-slate-500">Redirecting you to login…</p>
       </AuthLayout>
     );
   }

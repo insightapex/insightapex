@@ -60,7 +60,9 @@ export default function AdminLoginPage() {
               {isLoading ? "Signing in..." : "Sign in"}
             </Button>
           </form>
-          <p className="mt-4 text-xs text-slate-500">Demo: admin@insightapex.com / Admin@12345</p>
+          {process.env.NODE_ENV !== "production" && (
+            <p className="mt-4 text-xs text-slate-500">Demo: admin@insightapex.com / Admin@12345</p>
+          )}
         </div>
       </div>
     </div>

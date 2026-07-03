@@ -26,6 +26,7 @@ export function useLogin(options: UseLoginOptions = {}) {
   const router = useRouter();
   const [status, setStatus] = useState<LoginStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [needsEmailVerification, setNeedsEmailVerification] = useState(false);
   const [redirectMessage, setRedirectMessage] = useState<string | null>(null);
   const submittingRef = useRef(false);
 
@@ -46,6 +47,7 @@ export function useLogin(options: UseLoginOptions = {}) {
       submittingRef.current = true;
       setError(null);
       setRedirectMessage(null);
+      setNeedsEmailVerification(false);
       setStatus("signing-in");
 
       try {
@@ -56,13 +58,18 @@ export function useLogin(options: UseLoginOptions = {}) {
         });
 
         if (res?.error || !res?.ok) {
-          setError(adminOnly ? "Invalid credentials." : "Invalid email or password.");
+          if (res?.error === "EMAIL_NOT_VERIFIED") {
+            setNeedsEmailVerification(true);
+            setError("Please verify your email before logging in.");
+          } else {
+            setError(adminOnly ? "Invalid credentials." : "Invalid email or password.");
+          }
           resetSubmission();
           return;
         }
 
         const session = await getSession();
-        const role = (session?.user as { role?: string } | undefined)?.role;
+        const role = session?.user?.role;
         const destination = getRedirectPath(role, adminOnly);
 
         if (!destination) {
@@ -92,5 +99,6 @@ export function useLogin(options: UseLoginOptions = {}) {
     redirectMessage,
     isLoading,
     isRedirecting: status === "redirecting",
+    needsEmailVerification,
   };
 }

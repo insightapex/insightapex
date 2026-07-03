@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AuthLayout } from "@/components/marketing/AuthLayout";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { Spinner } from "@/components/ui/Spinner";
 
-export default function ResetPasswordPage() {
+function ResetPasswordForm() {
   const router = useRouter();
   const params = useSearchParams();
   const token = params.get("token") ?? "";
@@ -58,5 +59,21 @@ export default function ResetPasswordPage() {
         </Button>
       </form>
     </AuthLayout>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense
+      fallback={
+        <AuthLayout title="Set a new password" subtitle="Loading...">
+          <div className="flex justify-center py-8">
+            <Spinner className="h-6 w-6" />
+          </div>
+        </AuthLayout>
+      }
+    >
+      <ResetPasswordForm />
+    </Suspense>
   );
 }

@@ -2,8 +2,17 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { resetPasswordSchema } from "@/lib/validation";
+import {
+  AUTH_RATE_LIMIT,
+  checkRateLimit,
+  getClientIp,
+  rateLimitResponse,
+} from "@/lib/rate-limit";
 
 export async function POST(req: Request) {
+  const ip = getClientIp(req);
+  const rate = checkRateLimit(`reset-password:${ip}`, AUTH_RATE_LIMIT);
+  if (!rate.allowed) return rateLimitResponse(rate.retryAfterSec!);
   const body = await req.json();
   const parsed = resetPasswordSchema.safeParse(body);
   if (!parsed.success) {

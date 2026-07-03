@@ -1,10 +1,9 @@
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
-// Enums as string constants (resolved after `prisma generate`)
 const Role = { ADMIN: "ADMIN", STUDENT: "STUDENT" } as const;
 const DifficultyLevel = { EASY: "EASY", MEDIUM: "MEDIUM", HARD: "HARD" } as const;
 const AccessLevel = { FREE: "FREE", PREMIUM: "PREMIUM" } as const;
-import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
@@ -14,7 +13,7 @@ async function main() {
   const adminPassword = await bcrypt.hash("Admin@12345", 10);
   const studentPassword = await bcrypt.hash("Student@12345", 10);
 
-  const admin = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email: "admin@insightapex.com" },
     update: {},
     create: {
@@ -26,7 +25,7 @@ async function main() {
     },
   });
 
-  const student = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { email: "student@insightapex.com" },
     update: {},
     create: {
@@ -45,14 +44,34 @@ async function main() {
     { code: "FA", title: "Financial Accounting", description: "Principles of double-entry bookkeeping and financial statements." },
     { code: "PM", title: "Performance Management", description: "Advanced management accounting for decision-making and performance." },
     { code: "FR", title: "Financial Reporting", description: "Preparation and interpretation of financial statements under IFRS." },
+    { code: "SBR", title: "Strategic Business Reporting", description: "Advanced financial reporting and interpretation.", premium: true },
   ];
 
+  let premiumPaperId: string | null = null;
+
   for (const p of papers) {
+    const isPremium = "premium" in p && p.premium;
     const paper = await prisma.paper.upsert({
       where: { code: p.code },
-      update: {},
-      create: { ...p, accessLevel: AccessLevel.FREE, isActive: true },
+      update: isPremium
+        ? { accessLevel: AccessLevel.PREMIUM, isPremium: true, priceCents: 499, currency: "GBP" }
+        : {},
+      create: {
+        code: p.code,
+        title: p.title,
+        description: p.description,
+        accessLevel: isPremium ? AccessLevel.PREMIUM : AccessLevel.FREE,
+        isPremium: Boolean(isPremium),
+        priceCents: isPremium ? 499 : null,
+        currency: "GBP",
+        isActive: true,
+      },
     });
+
+    if (isPremium) premiumPaperId = paper.id;
+
+    const existingTopics = await prisma.topic.count({ where: { paperId: paper.id } });
+    if (existingTopics > 0) continue;
 
     const topics = [
       { title: `${p.code} Fundamentals`, description: `Introductory concepts for ${p.title}.` },
@@ -65,7 +84,6 @@ async function main() {
         data: { ...t, paperId: paper.id, isActive: true },
       });
 
-      // 4 sample questions per topic
       for (let i = 1; i <= 4; i++) {
         await prisma.question.create({
           data: {
@@ -91,9 +109,167 @@ async function main() {
     }
   }
 
+  // Billing plans
+  await prisma.plan.upsert({
+    where: { slug: "free" },
+    update: {},
+    create: {
+      name: "Free",
+      slug: "free",
+      description: "Get started with free ACCA practice content.",
+      accessType: "FREE",
+      priceCents: 0,
+      currency: "GBP",
+      billingInterval: "ONE_TIME",
+      features: ["Access to free papers", "Basic practice questions", "Progress tracking"],
+      isActive: true,
+    },
+  });
+
+  // Billing plans & products — Stripe IDs are stored in the database.
+  // Set providerProductId and providerPriceId via Admin → Billing → Plans / Products.
+
+  await prisma.plan.upsert({
+    where: { slug: "premium-monthly" },
+    update: {},
+    create: {
+      name: "Premium Monthly",
+      slug: "premium-monthly",
+      description: "Full access to all premium papers and mock exams, billed monthly.",
+      accessType: "MONTHLY_SUBSCRIPTION",
+      priceCents: 999,
+      currency: "GBP",
+      billingInterval: "MONTHLY",
+      features: [
+        "All premium papers unlocked",
+        "All mock exams included",
+        "Unlimited practice sessions",
+        "Priority support",
+      ],
+      isActive: true,
+      provider: null,
+      providerProductId: null,
+      providerPriceId: null,
+    },
+  });
+
+  await prisma.plan.upsert({
+    where: { slug: "premium-yearly" },
+    update: {},
+    create: {
+      name: "Premium Yearly",
+      slug: "premium-yearly",
+      description: "Best value — full premium access for a full year.",
+      accessType: "YEARLY_SUBSCRIPTION",
+      priceCents: 9999,
+      currency: "GBP",
+      billingInterval: "YEARLY",
+      features: [
+        "All premium papers unlocked",
+        "All mock exams included",
+        "Unlimited practice sessions",
+        "Save vs monthly billing",
+      ],
+      isActive: true,
+      provider: null,
+      providerProductId: null,
+      providerPriceId: null,
+    },
+  });
+
+  // Premium mock exam
+  let mockExamId: string | null = null;
+  if (premiumPaperId) {
+    const pmPaper = await prisma.paper.findUnique({ where: { code: "PM" } });
+    if (pmPaper) {
+      const questions = await prisma.question.findMany({
+        where: { topic: { paperId: pmPaper.id }, isActive: true },
+        take: 10,
+      });
+
+      const mockExam = await prisma.mockExam.upsert({
+        where: { id: "seed-premium-mock-pm" },
+        update: {},
+        create: {
+          id: "seed-premium-mock-pm",
+          paperId: pmPaper.id,
+          title: "PM Full Mock Exam",
+          description: "A full-length Performance Management mock exam with timed conditions.",
+          durationMinutes: 40,
+          passMarkPercent: 50,
+          status: "PUBLISHED",
+          accessLevel: AccessLevel.PREMIUM,
+          isPremium: true,
+          priceCents: 299,
+          currency: "GBP",
+          isActive: true,
+        },
+      });
+      mockExamId = mockExam.id;
+
+      const existingLinks = await prisma.mockExamQuestion.count({ where: { mockExamId: mockExam.id } });
+      if (existingLinks === 0 && questions.length > 0) {
+        await prisma.mockExamQuestion.createMany({
+          data: questions.map((q, i) => ({
+            mockExamId: mockExam.id,
+            questionId: q.id,
+            order: i,
+          })),
+        });
+      }
+    }
+  }
+
+  // One-time products
+  if (premiumPaperId) {
+    await prisma.product.upsert({
+      where: { slug: "sbr-paper-pack" },
+      update: {},
+      create: {
+        name: "SBR Paper Pack",
+        slug: "sbr-paper-pack",
+        description: "One-time purchase for Strategic Business Reporting practice content.",
+        type: "PAPER",
+        accessType: "ONE_TIME_PAPER",
+        isPremium: true,
+        priceCents: 499,
+        currency: "GBP",
+        paperId: premiumPaperId,
+        isActive: true,
+        provider: null,
+        providerProductId: null,
+        providerPriceId: null,
+      },
+    });
+  }
+
+  if (mockExamId) {
+    await prisma.product.upsert({
+      where: { slug: "pm-mock-exam" },
+      update: {},
+      create: {
+        name: "PM Mock Exam",
+        slug: "pm-mock-exam",
+        description: "One-time purchase for the PM Full Mock Exam.",
+        type: "MOCK_EXAM",
+        accessType: "ONE_TIME_MOCK_EXAM",
+        isPremium: true,
+        priceCents: 299,
+        currency: "GBP",
+        mockExamId,
+        isActive: true,
+        provider: null,
+        providerProductId: null,
+        providerPriceId: null,
+      },
+    });
+  }
+
   console.log("Seed complete.");
-  console.log("Admin login: admin@insightapex.com / Admin@12345");
-  console.log("Student login: student@insightapex.com / Student@12345");
+  if (process.env.NODE_ENV !== "production") {
+    console.log("Admin login: admin@insightapex.com / Admin@12345");
+    console.log("Student login: student@insightapex.com / Student@12345");
+  }
 }
 
 main()

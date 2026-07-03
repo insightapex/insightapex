@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { requireAuthApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { MAX_PRACTICE_QUESTIONS } from "@/lib/practice";
+import { hasPaperAccess } from "@/services/access-control";
 
 const startSchema = z.object({
   paperId: z.string(),
@@ -14,10 +14,10 @@ const startSchema = z.object({
 });
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const user = await requireAuthApi();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const userId = (session.user as any).id;
+  const userId = user.id;
   const body = await req.json();
   const parsed = startSchema.safeParse(body);
   if (!parsed.success) {
@@ -25,6 +25,15 @@ export async function POST(req: Request) {
   }
 
   const { paperId, topicId, limit, durationSeconds, reviewMode } = parsed.data;
+
+  const hasAccess = await hasPaperAccess(userId, paperId);
+  if (!hasAccess) {
+    return NextResponse.json(
+      { error: "Upgrade required to practice this paper.", code: "ACCESS_DENIED", upgradeUrl: "/dashboard/pricing" },
+      { status: 403 }
+    );
+  }
+
   const maxQuestions = Math.min(limit, MAX_PRACTICE_QUESTIONS);
 
   const questions = await prisma.question.findMany({
