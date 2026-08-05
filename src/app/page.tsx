@@ -17,9 +17,9 @@ const features = [
       "Every attempt feeds a dashboard of scores, pass rates, and trends — so you always know exactly where you stand.",
   },
   {
-    title: "Weak Topic Analysis",
+    title: "Weak Area Analysis",
     description:
-      "InsightApex breaks down performance by topic, surfacing the exact areas costing you marks so you study smarter, not longer.",
+      "InsightApex breaks down performance by category and sub category, surfacing the exact areas costing you marks so you study smarter, not longer.",
   },
   {
     title: "Detailed Answer Explanations",
@@ -49,15 +49,15 @@ export default function HomePage() {
             Pass your ACCA exams with confidence, not guesswork.
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-slate-600">
-            InsightApex combines realistic mock exams, precise progress tracking, and weak-topic
+            InsightApex combines realistic mock exams, precise progress tracking, and weak-area
             analysis into one clean platform — so every study hour counts.
           </p>
-          <div className="mt-10 flex items-center justify-center gap-4">
-            <Link href="/register">
-              <Button size="lg">Register for free</Button>
+          <div className="mt-10 flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <Link href="/register" className="w-full sm:w-auto">
+              <Button size="lg" className="w-full sm:w-auto">Register for free</Button>
             </Link>
-            <Link href="/login">
-              <Button size="lg" variant="outline">Log in</Button>
+            <Link href="/login" className="w-full sm:w-auto">
+              <Button size="lg" variant="outline" className="w-full sm:w-auto">Log in</Button>
             </Link>
           </div>
         </div>
@@ -111,9 +111,9 @@ export default function HomePage() {
         </div>
         <div className="mt-14 grid gap-8 sm:grid-cols-3">
           {[
-            { step: "1", title: "Choose a paper", desc: "Pick from BT through FR and select a topic to focus on." },
+            { step: "1", title: "Choose a paper", desc: "Pick from BT through FR, then select a category and sub category." },
             { step: "2", title: "Take a timed quiz", desc: "Answer exam-style MCQs, flag tricky ones, then submit." },
-            { step: "3", title: "Review your results", desc: "See your score, weak topics, and detailed explanations." },
+            { step: "3", title: "Review your results", desc: "See your score, weak sub categories, and detailed explanations." },
           ].map((s) => (
             <div key={s.step} className="text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-brand-600 text-lg font-bold text-white">

@@ -5,7 +5,14 @@ import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
+import { Textarea } from "@/components/ui/Textarea";
 import { Modal } from "@/components/ui/Modal";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageLoading } from "@/components/ui/PageLoading";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Alert } from "@/components/ui/Alert";
+import { Table, TableHead, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/Table";
 import { AdminAlert } from "@/components/admin/AdminAlert";
 
 interface Plan {
@@ -38,6 +45,7 @@ const emptyForm = {
 
 export default function AdminPlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
@@ -53,13 +61,17 @@ export default function AdminPlansPage() {
   const [alert, setAlert] = useState<{ tone: "success" | "error"; message: string } | null>(null);
 
   async function load() {
+    setLoading(true);
     const res = await fetch("/api/admin/billing/plans");
     const data = await res.json();
     if (!res.ok) {
       setAlert({ tone: "error", message: data.error ?? "Failed to load plans." });
+      setPlans([]);
+      setLoading(false);
       return;
     }
     setPlans(Array.isArray(data) ? data : []);
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -155,13 +167,11 @@ export default function AdminPlansPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-ink-900">Subscription Plans</h1>
-          <p className="mt-1 text-sm text-slate-500">Manage subscription plans and Stripe IDs.</p>
-        </div>
-        <Button onClick={() => setShowForm(!showForm)}>{showForm ? "Cancel" : "+ Add Plan"}</Button>
-      </div>
+      <PageHeader
+        title="Subscription Plans"
+        description="Manage subscription plans and Stripe IDs."
+        action={{ label: showForm ? "Cancel" : "+ Add Plan", onClick: () => setShowForm(!showForm) }}
+      />
 
       {alert && (
         <AdminAlert tone={alert.tone} message={alert.message} onDismiss={() => setAlert(null)} />
@@ -181,9 +191,8 @@ export default function AdminPlansPage() {
               <Input label="Stripe Product ID" value={form.providerProductId} onChange={(e) => setForm({ ...form, providerProductId: e.target.value })} placeholder="prod_..." />
               <Input label="Stripe Price ID" value={form.providerPriceId} onChange={(e) => setForm({ ...form, providerPriceId: e.target.value })} placeholder="price_..." />
               <div className="sm:col-span-2">
-                <label className="mb-1 block text-sm font-medium text-slate-700">Features (one per line)</label>
-                <textarea
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                <Textarea
+                  label="Features (one per line)"
                   rows={4}
                   value={form.features}
                   onChange={(e) => setForm({ ...form, features: e.target.value })}
@@ -199,63 +208,61 @@ export default function AdminPlansPage() {
 
       <Card>
         <CardBody className="p-0">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50">
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Plan Name</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Stripe Product ID</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Stripe Price ID</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {plans.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-50">
-                  <td className="px-5 py-3">
-                    <div className="font-medium text-slate-800">{p.name}</div>
-                    <div className="text-xs text-slate-400">{p.slug}</div>
-                  </td>
-                  <td className="px-5 py-3 font-mono text-xs text-slate-500">{p.providerProductId ?? "—"}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-slate-500">{p.providerPriceId ?? "—"}</td>
-                  <td className="px-5 py-3">
-                    <Badge tone={p.isActive ? "success" : "neutral"}>{p.isActive ? "Active" : "Inactive"}</Badge>
-                  </td>
-                  <td className="px-5 py-3">
-                    <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
-                      Edit
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {loading ? (
+            <PageLoading message="Loading plans…" />
+          ) : plans.length === 0 ? (
+            <EmptyState icon="billing" title="No plans yet" description="Create a subscription plan to get started." />
+          ) : (
+            <Table>
+              <TableHead>
+                <TableHeader>Plan Name</TableHeader>
+                <TableHeader>Stripe Product ID</TableHeader>
+                <TableHeader>Stripe Price ID</TableHeader>
+                <TableHeader>Status</TableHeader>
+                <TableHeader>Actions</TableHeader>
+              </TableHead>
+              <TableBody>
+                {plans.map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell>
+                      <div className="font-medium text-slate-800">{p.name}</div>
+                      <div className="text-xs text-slate-400">{p.slug}</div>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-slate-500">{p.providerProductId ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-xs text-slate-500">{p.providerPriceId ?? "—"}</TableCell>
+                    <TableCell>
+                      <Badge tone={p.isActive ? "success" : "neutral"}>{p.isActive ? "Active" : "Inactive"}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
+                        Edit
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
         </CardBody>
       </Card>
 
       <Modal open={editingPlan !== null} onClose={saving ? () => {} : closeEdit} title="Edit Plan">
         <form onSubmit={handleEdit} className="space-y-4">
-          {editError && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {editError}
-            </div>
-          )}
+          {editError && <Alert tone="error">{editError}</Alert>}
           <Input label="Name" required value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} />
           <Input label="Price (pence)" type="number" required value={editForm.priceCents} onChange={(e) => setEditForm({ ...editForm, priceCents: e.target.value })} />
           <Input label="Stripe Product ID" value={editForm.providerProductId} onChange={(e) => setEditForm({ ...editForm, providerProductId: e.target.value })} placeholder="prod_..." />
           <Input label="Stripe Price ID" value={editForm.providerPriceId} onChange={(e) => setEditForm({ ...editForm, providerPriceId: e.target.value })} placeholder="price_..." />
-          <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Status</label>
-            <select
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              value={editForm.isActive ? "active" : "inactive"}
-              onChange={(e) => setEditForm({ ...editForm, isActive: e.target.value === "active" })}
-            >
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </select>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
+          <Select
+            label="Status"
+            value={editForm.isActive ? "active" : "inactive"}
+            onChange={(e) => setEditForm({ ...editForm, isActive: e.target.value === "active" })}
+            options={[
+              { value: "active", label: "Active" },
+              { value: "inactive", label: "Inactive" },
+            ]}
+          />
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={closeEdit} disabled={saving}>Cancel</Button>
             <Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save Changes"}</Button>
           </div>

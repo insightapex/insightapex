@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import {
   getQuestionCountOptions,
-  type ReviewMode,
   type TimeOption,
   timeOptionToSeconds,
 } from "@/lib/practice";
@@ -15,15 +14,18 @@ import { cn } from "@/lib/utils";
 export interface PracticeStartOptions {
   questionCount: number;
   durationSeconds: number;
-  reviewMode: ReviewMode;
 }
 
 interface PracticeOptionsModalProps {
   open: boolean;
   onClose: () => void;
   paper: { code: string; title: string };
-  topicTitle: string;
+  subCategoryTitle: string;
+  freeQuestionCount: number;
+  premiumQuestionCount: number;
+  totalQuestionCount: number;
   availableCount: number;
+  hasPremiumAccess?: boolean;
   loading?: boolean;
   error?: string | null;
   onStart: (options: PracticeStartOptions) => void;
@@ -70,17 +72,17 @@ function OptionGroup<T extends string | number>({
 }
 
 const TIME_OPTIONS: TimeOption[] = ["untimed", "20", "40"];
-const REVIEW_OPTIONS: { value: ReviewMode; label: string }[] = [
-  { value: "after_each", label: "Show explanation after each question" },
-  { value: "at_end", label: "Show explanation at the end" },
-];
 
 export function PracticeOptionsModal({
   open,
   onClose,
   paper,
-  topicTitle,
+  subCategoryTitle,
+  freeQuestionCount,
+  premiumQuestionCount,
+  totalQuestionCount,
   availableCount,
+  hasPremiumAccess = false,
   loading = false,
   error = null,
   onStart,
@@ -90,14 +92,12 @@ export function PracticeOptionsModal({
 
   const [questionCount, setQuestionCount] = useState(questionOptions[0] ?? 10);
   const [timeOption, setTimeOption] = useState<TimeOption>("untimed");
-  const [reviewMode, setReviewMode] = useState<ReviewMode>("at_end");
 
   useEffect(() => {
     if (!open) return;
     const counts = getQuestionCountOptions(availableCount);
     setQuestionCount(counts[counts.length - 1] ?? counts[0] ?? 10);
     setTimeOption("untimed");
-    setReviewMode("at_end");
   }, [open, availableCount]);
 
   function handleStart() {
@@ -105,7 +105,6 @@ export function PracticeOptionsModal({
     onStart({
       questionCount,
       durationSeconds: timeOptionToSeconds(timeOption),
-      reviewMode,
     });
   }
 
@@ -120,11 +119,19 @@ export function PracticeOptionsModal({
             </span>
           </p>
           <p className="mt-1 text-slate-500">
-            Topic: <span className="font-medium text-slate-800">{topicTitle}</span>
+            Sub Category: <span className="font-medium text-slate-800">{subCategoryTitle}</span>
           </p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-slate-500">
+            <span>Free: <span className="font-medium text-emerald-700">{freeQuestionCount}</span></span>
+            <span>Premium: <span className="font-medium text-brand-700">{premiumQuestionCount}</span></span>
+            <span>Total: <span className="font-medium text-slate-800">{totalQuestionCount}</span></span>
+          </div>
           <p className="mt-1 text-slate-500">
-            Available Questions:{" "}
+            You can practice:{" "}
             <span className="font-medium text-slate-800">{availableCount}</span>
+            {!hasPremiumAccess && premiumQuestionCount > 0 && (
+              <span className="text-amber-700"> (premium questions locked)</span>
+            )}
           </p>
         </div>
 
@@ -153,37 +160,6 @@ export function PracticeOptionsModal({
               }}
             />
 
-            <div className="space-y-2.5">
-              <p className="text-sm font-medium text-slate-700">Review</p>
-              <div className="space-y-2">
-                {REVIEW_OPTIONS.map((option) => {
-                  const active = reviewMode === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => setReviewMode(option.value)}
-                      className={cn(
-                        "flex w-full items-center gap-3 rounded-lg border px-3.5 py-3 text-left text-sm transition-all",
-                        active
-                          ? "border-brand-500 bg-brand-50 text-brand-800"
-                          : "border-slate-200 bg-white text-slate-600 hover:border-brand-200 hover:bg-brand-50/50"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
-                          active ? "border-brand-500 bg-brand-500" : "border-slate-300"
-                        )}
-                      >
-                        {active && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
-                      </span>
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
           </>
         )}
 

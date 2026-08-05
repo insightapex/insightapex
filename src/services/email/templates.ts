@@ -107,3 +107,38 @@ export function passwordResetEmailHtml(appUrl: string, resetUrl: string): string
     appUrl,
   });
 }
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function lecturerMessageEmailHtml(params: {
+  appUrl: string;
+  lecturerName: string;
+  schoolName: string;
+  subject: string;
+  message: string;
+}): string {
+  const lecturer = escapeHtml(params.lecturerName);
+  const school = escapeHtml(params.schoolName);
+  const subject = escapeHtml(params.subject);
+  const message = escapeHtml(params.message).replace(/\n/g, "<br />");
+  return layout({
+    title: subject,
+    previewText: `Message from ${lecturer} at ${school}`,
+    heading: subject,
+    bodyHtml: `
+      <p style="margin:0 0 12px;"><strong>${lecturer}</strong> from <strong>${school}</strong> sent you a message:</p>
+      <p style="margin:0;padding:14px 16px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;">${message}</p>
+    `,
+    buttonLabel: "Open InsightApex",
+    buttonUrl: `${params.appUrl}/dashboard`,
+    footerNote: "You received this because you are enrolled with this school on InsightApex.",
+    appUrl: params.appUrl,
+  });
+}
+

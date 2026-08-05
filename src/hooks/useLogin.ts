@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSession, signIn, signOut } from "next-auth/react";
+import { homePathForRole, isOwner, isContentAdmin } from "@/lib/roles";
 
 export type LoginStatus = "idle" | "signing-in" | "redirecting";
 
@@ -12,13 +13,17 @@ type UseLoginOptions = {
 
 function getRedirectPath(role: string | undefined, adminOnly: boolean): string | null {
   if (adminOnly) {
-    return role === "ADMIN" ? "/admin" : null;
+    return isOwner(role) || isContentAdmin(role) ? "/admin" : null;
   }
-  return role === "ADMIN" ? "/admin" : "/dashboard";
+  if (!role) return "/dashboard";
+  return homePathForRole(role);
 }
 
 function getRedirectMessage(path: string): string {
-  return path === "/admin" ? "Redirecting to admin panel..." : "Redirecting to your dashboard...";
+  if (path === "/admin") return "Redirecting to admin panel...";
+  if (path === "/partner") return "Redirecting to partner portal...";
+  if (path === "/lecturer") return "Redirecting to lecturer portal...";
+  return "Redirecting to your dashboard...";
 }
 
 export function useLogin(options: UseLoginOptions = {}) {
@@ -33,6 +38,8 @@ export function useLogin(options: UseLoginOptions = {}) {
   useEffect(() => {
     router.prefetch("/dashboard");
     router.prefetch("/admin");
+    router.prefetch("/partner");
+    router.prefetch("/lecturer");
   }, [router]);
 
   const resetSubmission = useCallback(() => {

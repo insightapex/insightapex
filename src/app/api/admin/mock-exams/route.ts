@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { requireAdminApi } from "@/lib/admin-auth";
+import { requireContentEditorApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { mockExamSchema } from "@/lib/validation/admin-content";
 
 export async function GET(req: Request) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -34,7 +34,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -51,9 +51,14 @@ export async function POST(req: Request) {
     );
   }
 
+  if (!parsed.data.title?.trim()) {
+    return NextResponse.json({ error: "Title is required" }, { status: 400 });
+  }
+
   const mockExam = await prisma.mockExam.create({
     data: {
       ...parsed.data,
+      title: parsed.data.title.trim(),
       status: "DRAFT",
     },
     include: {

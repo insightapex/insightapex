@@ -1,76 +1,112 @@
 import { NextResponse } from "next/server";
-import { requireAdminApi } from "@/lib/admin-auth";
+import { requireContentEditorApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
+import { adminMockExamQuestionSchema } from "@/lib/validation/admin-question";
 import { mockExamQuestionsSchema } from "@/lib/validation/admin-content";
 
+/** List / manage MOCK_EXAM questions for one mock exam (not the practice pool). */
 export async function GET(
-  req: Request,
+  _req: Request,
   { params }: { params: { mockExamId: string } }
 ) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const mockExam = await prisma.mockExam.findUnique({
     where: { id: params.mockExamId },
-    select: { id: true, paperId: true },
+    select: { id: true, paperId: true, title: true, status: true },
   });
   if (!mockExam) return NextResponse.json({ error: "Mock exam not found" }, { status: 404 });
 
-  const url = new URL(req.url);
-  const paperId = url.searchParams.get("paperId") ?? mockExam.paperId;
-  const topicId = url.searchParams.get("topicId");
-  const search = url.searchParams.get("q") ?? "";
-
-  const where: Record<string, unknown> = {
-    isActive: true,
-    topic: { paperId, isActive: true },
-  };
-  if (topicId) where.topicId = topicId;
-  if (search) where.text = { contains: search, mode: "insensitive" };
-
-  const [selected, available] = await Promise.all([
-    prisma.mockExamQuestion.findMany({
-      where: { mockExamId: params.mockExamId },
-      orderBy: { order: "asc" },
-      include: {
-        question: {
-          include: {
-            topic: { select: { title: true, paper: { select: { code: true } } } },
-          },
+  const selected = await prisma.mockExamQuestion.findMany({
+    where: {
+      mockExamId: params.mockExamId,
+      question: { purpose: "MOCK_EXAM" },
+    },
+    orderBy: { order: "asc" },
+    include: {
+      question: {
+        include: {
+          options: { orderBy: { order: "asc" } },
         },
       },
-    }),
-    prisma.question.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      include: {
-        topic: { select: { title: true, paper: { select: { code: true } } } },
-      },
-    }),
-  ]);
-
-  const selectedIds = new Set(selected.map((s) => s.questionId));
+    },
+  });
 
   return NextResponse.json({
+    mockExam,
     selected,
-    available: available.filter((q) => !selectedIds.has(q.id)),
     totalSelected: selected.length,
   });
 }
 
-export async function PUT(
+/** Create a new MOCK_EXAM question and append it to this mock exam set. */
+export async function POST(
   req: Request,
   { params }: { params: { mockExamId: string } }
 ) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const mockExam = await prisma.mockExam.findUnique({
     where: { id: params.mockExamId },
-    select: { id: true, paperId: true, status: true },
+    select: { id: true },
+  });
+  if (!mockExam) return NextResponse.json({ error: "Mock exam not found" }, { status: 404 });
+
+  const body = await req.json();
+  const parsed = adminMockExamQuestionSchema.safeParse({ ...body, purpose: "MOCK_EXAM" });
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message }, { status: 400 });
+  }
+
+  const { options, purpose: _purpose, ...rest } = parsed.data;
+  const maxOrder = await prisma.mockExamQuestion.aggregate({
+    where: { mockExamId: params.mockExamId },
+    _max: { order: true },
+  });
+  const nextOrder = (maxOrder._max.order ?? -1) + 1;
+
+  const link = await prisma.$transaction(async (tx) => {
+    const question = await tx.question.create({
+      data: {
+        ...rest,
+        purpose: "MOCK_EXAM",
+        subCategoryId: null,
+        options: { create: options },
+      },
+    });
+    return tx.mockExamQuestion.create({
+      data: {
+        mockExamId: params.mockExamId,
+        questionId: question.id,
+        order: nextOrder,
+      },
+      include: {
+        question: {
+          include: { options: { orderBy: { order: "asc" } } },
+        },
+      },
+    });
+  });
+
+  return NextResponse.json(link, { status: 201 });
+}
+
+/** Reorder existing MOCK_EXAM questions for this exam (fixed set order). */
+export async function PUT(
+  req: Request,
+  { params }: { params: { mockExamId: string } }
+) {
+  if (!(await requireContentEditorApi())) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const mockExam = await prisma.mockExam.findUnique({
+    where: { id: params.mockExamId },
+    select: { id: true, status: true },
   });
   if (!mockExam) return NextResponse.json({ error: "Mock exam not found" }, { status: 404 });
 
@@ -83,14 +119,18 @@ export async function PUT(
   const questions = await prisma.question.findMany({
     where: {
       id: { in: parsed.data.questionIds },
-      topic: { paperId: mockExam.paperId },
+      purpose: "MOCK_EXAM",
+      mockExamLinks: { some: { mockExamId: params.mockExamId } },
     },
     select: { id: true },
   });
 
   if (questions.length !== parsed.data.questionIds.length) {
     return NextResponse.json(
-      { error: "Some questions are invalid or belong to a different paper." },
+      {
+        error:
+          "Some questions are invalid. Mock exams can only use MOCK_EXAM questions assigned to this exam.",
+      },
       { status: 400 }
     );
   }

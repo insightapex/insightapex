@@ -2,14 +2,21 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export function useTimer(initialSeconds: number, onExpire?: () => void) {
+export function useTimer(
+  initialSeconds: number,
+  onExpire?: () => void,
+  paused = false
+) {
   const [seconds, setSeconds] = useState(initialSeconds);
   const expired = useRef(false);
 
   useEffect(() => {
     setSeconds(initialSeconds);
     expired.current = false;
-    if (initialSeconds <= 0) return;
+  }, [initialSeconds]);
+
+  useEffect(() => {
+    if (initialSeconds <= 0 || paused) return;
 
     const interval = setInterval(() => {
       setSeconds((s) => {
@@ -25,7 +32,7 @@ export function useTimer(initialSeconds: number, onExpire?: () => void) {
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [initialSeconds, onExpire]);
+  }, [initialSeconds, onExpire, paused]);
 
   const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
   const ss = String(seconds % 60).padStart(2, "0");

@@ -17,7 +17,25 @@ datasource db {
 
 enum Role {
   STUDENT
-  ADMIN
+  OWNER // Platform owner (formerly ADMIN / Super Admin)
+  CONTENT_ADMIN
+  PARTNER_ADMIN
+  LECTURER
+}
+
+enum PartnerStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum ClassStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum PartnerMemberRole {
+  PARTNER_ADMIN
+  LECTURER
 }
 
 enum DifficultyLevel {
@@ -60,6 +78,22 @@ enum MockExamStatus {
   PUBLISHED
 }
 
+enum QuestionAccessLevel {
+  FREE_TRIAL
+  PREMIUM
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+}
+
+enum QuestionPurpose {
+  PRACTICE
+  MOCK_EXAM
+}
+
 enum BillingAccessType {
   FREE
   MONTHLY_SUBSCRIPTION
@@ -96,6 +130,13 @@ enum UserAccessStatus {
   REVOKED
 }
 
+enum NotificationType {
+  QUIZ_RESULT
+  BILLING
+  SYSTEM
+  LECTURER_MESSAGE
+}
+
 // ---------------------------------------------------------------------------
 // USERS & AUTH
 // ---------------------------------------------------------------------------
@@ -109,6 +150,13 @@ model User {
   emailVerified DateTime?
   image         String?
   stripeCustomerId String?
+  /// Students belong to at most one partner (their school) for now.
+  partnerId     String?
+  partner       Partner? @relation("PartnerStudents", fields: [partnerId], references: [id], onDelete: SetNull)
+  /// Where the student came from (Facebook, Telegram, ...). Data-driven so new
+  /// sources can be added without code changes.
+  registrationSourceId String?
+  registrationSource   RegistrationSource? @relation(fields: [registrationSourceId], references: [id], onDelete: SetNull)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -121,15 +169,43 @@ model User {
   attempts      QuizAttempt[]
   profile       StudentProfile?
 
+  // Partner / Lecturer portal
+  partnerMemberships PartnerMember[]
+  classEnrollments   ClassStudent[]
+  partnerInvitationsSent PartnerInvitation[] @relation("InvitationInviter")
+  lecturerPaperAssignments LecturerPaperAssignment[]
+  lecturerClassAssignments LecturerClassAssignment[]
+
   // Phase 2/3 placeholders — left empty/unused in Phase 1
   subscriptions Subscription[]
   purchases     Purchase[]
   payments      Payment[]
   userAccess    UserAccess[]
   certificates  Certificate[]
+  notifications Notification[]
+  adminAuditLogs AdminAuditLog[]
+  questionImportBatches QuestionImportBatch[]
 
   @@index([email])
   @@index([stripeCustomerId])
+  @@index([partnerId])
+  @@index([registrationSourceId])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  href      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
 }
 
 model StudentProfile {
@@ -175,10 +251,29 @@ model Session {
 
 // ---------------------------------------------------------------------------
 // ACCA CONTENT STRUCTURE
+// Part → Paper → Category → SubCategory → Question
 // ---------------------------------------------------------------------------
+
+model Part {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g. "PART_1", "PART_2", "PART_3"
+  title       String
+  description String?
+  order       Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  papers      Paper[]
+
+  @@index([order])
+  @@index([isActive])
+}
 
 model Paper {
   id          String   @id @default(cuid())
+  partId      String
+  part        Part     @relation(fields: [partId], references: [id], onDelete: Restrict)
   code        String   @unique // e.g. "FA1", "PM", "SBR"
   title       String
   description String?
@@ -191,50 +286,131 @@ model Paper {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  topics      Topic[]
+  categories  Category[]
   attempts    QuizAttempt[]
   mockExams   MockExam[]
+  lecturerAssignments LecturerPaperAssignment[]
 
   // Phase 2 placeholder: paper-specific purchase packs
   purchases   Purchase[]
   products    Product[]
   userAccess  UserAccess[]
+
+  @@index([partId])
 }
 
-model Topic {
-  id          String   @id @default(cuid())
-  paperId     String
-  paper       Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
-  title       String
-  description String?
-  isActive    Boolean  @default(true)
-  order       Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+enum QuestionImportStatus {
+  PREVIEW
+  COMPLETED
+  FAILED
+  CANCELLED
+}
 
-  questions   Question[]
+model Category {
+  id              String   @id @default(cuid())
+  paperId         String
+  paper           Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  /// Stable topic key from Excel "Topic ID" (unique within a paper).
+  externalTopicId String?
+  isActive        Boolean  @default(true)
+  order           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
+  subCategories SubCategory[]
+
+  @@unique([paperId, externalTopicId])
   @@index([paperId])
 }
 
+model SubCategory {
+  id                 String   @id @default(cuid())
+  categoryId         String
+  category           Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  title              String
+  description        String?
+  /// Stable sub-topic key from Excel "Sub-Topic ID" (unique within a category).
+  externalSubTopicId String?
+  isActive           Boolean  @default(true)
+  order              Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  questions   Question[]
+
+  @@unique([categoryId, externalSubTopicId])
+  @@index([categoryId])
+}
+
 model Question {
-  id            String   @id @default(cuid())
-  topicId       String
-  topic         Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
-  text          String
-  explanation   String?
-  difficulty    DifficultyLevel @default(MEDIUM)
-  marks         Int      @default(1)
-  imageUrl      String?  // Cloudflare R2-ready: stores public object URL
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  /// PRACTICE questions sit under Part → Paper → Category → Sub Category.
+  /// MOCK_EXAM questions are attached only via MockExamQuestion and may omit subcategory.
+  subCategoryId      String?
+  subCategory        SubCategory? @relation(fields: [subCategoryId], references: [id], onDelete: Cascade)
+  /// Stable ID from Excel "ID" column — unique across the bank for upsert imports.
+  externalQuestionId String?  @unique
+  text               String
+  explanation        String?
+  /// Burmese explanation from Excel.
+  explanationMy      String?
+  learningOutcome    String?
+  questionType       QuestionType @default(SINGLE_CHOICE)
+  difficulty         DifficultyLevel @default(MEDIUM)
+  marks              Int      @default(1)
+  imageUrl           String?  // Cloudflare R2-ready: stores public object URL
+  accessLevel        QuestionAccessLevel @default(PREMIUM)
+  purpose            QuestionPurpose @default(PRACTICE)
+  /// Raw review status from import (Draft / Approved / Published).
+  reviewStatus       String?
+  isActive           Boolean  @default(true)
+  lastImportedAt     DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   options       AnswerOption[]
   responses     QuestionResponse[]
   mockExamLinks MockExamQuestion[]
 
-  @@index([topicId])
+  @@index([subCategoryId])
+  @@index([purpose])
+  @@index([purpose, isActive])
+  @@index([externalQuestionId])
+}
+
+/// Excel question bank import batch (preview + result + error report).
+model QuestionImportBatch {
+  id                   String               @id @default(cuid())
+  fileName             String
+  uploadedById         String
+  uploadedBy           User                 @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  status               QuestionImportStatus @default(PREVIEW)
+  sheetsDetected       String[]             @default([])
+  totalRows            Int                  @default(0)
+  validRows            Int                  @default(0)
+  invalidRows          Int                  @default(0)
+  newCount             Int                  @default(0)
+  updateCount          Int                  @default(0)
+  duplicateInFileCount Int                  @default(0)
+  createdCount         Int                  @default(0)
+  updatedCount         Int                  @default(0)
+  skippedCount         Int                  @default(0)
+  failedCount          Int                  @default(0)
+  accessLevelDefault   QuestionAccessLevel  @default(PREMIUM)
+  createMissingTaxonomy Boolean             @default(false)
+  /// Validated row payloads ready for confirm (JSON).
+  previewPayload       Json?
+  /// Row-level preview/error report for UI + download.
+  errorReport          Json?
+  createdAt            DateTime             @default(now())
+  completedAt          DateTime?
+  updatedAt            DateTime             @updatedAt
+
+  @@index([uploadedById])
+  @@index([createdAt])
+  @@index([status])
 }
 
 model AnswerOption {
@@ -335,6 +511,7 @@ model QuestionResponse {
   question        Question @relation(fields: [questionId], references: [id])
   selectedOptionId String?
   selectedOption  AnswerOption? @relation(fields: [selectedOptionId], references: [id])
+  selectedOptionIds String[] @default([])
   isCorrect       Boolean  @default(false)
   markedForReview Boolean  @default(false)
   answeredAt      DateTime?
@@ -508,4 +685,236 @@ model Certificate {
   // TODO Phase 3: PDF generation + R2 storage URL
   fileUrl     String?
   issuedAt    DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// PLATFORM SETTINGS & AUDIT
+// ---------------------------------------------------------------------------
+
+model PlatformSettings {
+  id                           String   @id @default("default")
+
+  platformName                 String   @default("InsightApex")
+  supportEmail                 String   @default("support@insightapex.com")
+  platformUrl                  String   @default("http://localhost:3000")
+  timezone                     String   @default("UTC")
+  currency                     String   @default("GBP")
+  maintenanceMode              Boolean  @default(false)
+
+  allowRegistration            Boolean  @default(true)
+  requireEmailVerification     Boolean  @default(true)
+  allowBookmarks               Boolean  @default(true)
+  allowQuestionFlagging        Boolean  @default(true)
+  allowDifficultyRating        Boolean  @default(true)
+  allowAnswerReview            Boolean  @default(true)
+  studentSessionTimeoutMinutes Int      @default(120)
+
+  defaultPassMark              Int      @default(50)
+  defaultTimerMinutes          Int      @default(40)
+  randomiseQuestions           Boolean  @default(true)
+  randomiseAnswerOptions       Boolean  @default(true)
+  allowPreviousQuestion        Boolean  @default(true)
+  showExplanationAfterCheck    Boolean  @default(true)
+  enableNegativeMarking        Boolean  @default(false)
+
+  enableMonthlyPlan            Boolean  @default(true)
+  enableYearlyPlan             Boolean  @default(true)
+  enablePaperPurchases         Boolean  @default(true)
+  enableMockExamPurchases      Boolean  @default(true)
+
+  senderName                   String   @default("InsightApex")
+  senderEmail                  String   @default("onboarding@resend.dev")
+  enableVerificationEmails     Boolean  @default(true)
+  enableResetPasswordEmails    Boolean  @default(true)
+
+  minPasswordLength            Int      @default(8)
+  maxLoginAttempts             Int      @default(10)
+  adminSessionTimeoutMinutes   Int      @default(480)
+  requireAdmin2fa              Boolean  @default(false)
+  maintenanceAdminAccess       Boolean  @default(true)
+
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+}
+
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  target     String?
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// PARTNER PORTAL (tenant isolation)
+// ---------------------------------------------------------------------------
+
+model Partner {
+  id           String        @id @default(cuid())
+  name         String
+  slug         String        @unique
+  logoUrl      String?
+  contactEmail String?
+  status       PartnerStatus @default(ACTIVE)
+  /// Commission share earned on this school's students' premium purchases (0..1).
+  commissionRate Float       @default(0.3)
+  /// When true, this partner is selectable as a "school" during public student registration.
+  allowPublicRegistration Boolean @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  members     PartnerMember[]
+  classes     Class[]
+  students    User[]               @relation("PartnerStudents")
+  invitations PartnerInvitation[]
+  payouts     PartnerPayout[]
+  lecturerPaperAssignments LecturerPaperAssignment[]
+  lecturerClassAssignments LecturerClassAssignment[]
+
+  @@index([status])
+  @@index([allowPublicRegistration])
+}
+
+/// Commission payout ledger. Pending commission = lifetime commission earned
+/// minus the sum of recorded payouts for the partner.
+model PartnerPayout {
+  id          String   @id @default(cuid())
+  partnerId   String
+  partner     Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  amountCents Int
+  note        String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([partnerId])
+  @@index([partnerId, createdAt])
+}
+
+/// Data-driven acquisition sources (Facebook, Telegram, Viber, ...). Adding a
+/// row here surfaces a new registration source without any code change.
+model RegistrationSource {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+
+  @@index([isActive])
+  @@index([order])
+}
+
+model PartnerMember {
+  id        String            @id @default(cuid())
+  partnerId String
+  partner   Partner           @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      PartnerMemberRole @default(PARTNER_ADMIN)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@unique([partnerId, userId])
+  @@index([userId])
+  @@index([partnerId])
+}
+
+model Class {
+  id          String      @id @default(cuid())
+  partnerId   String
+  partner     Partner     @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  status      ClassStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  students  ClassStudent[]
+  lecturers LecturerClassAssignment[]
+
+  @@index([partnerId])
+  @@index([partnerId, status])
+}
+
+/// Lecturer ↔ Paper assignment (scoped to a partner/school).
+model LecturerPaperAssignment {
+  id         String   @id @default(cuid())
+  partnerId  String
+  partner    Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  lecturerId String
+  lecturer   User     @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  paperId    String
+  paper      Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([lecturerId, paperId])
+  @@index([partnerId])
+  @@index([lecturerId])
+  @@index([paperId])
+  @@index([partnerId, lecturerId])
+}
+
+/// Lecturer ↔ Class assignment (scoped to a partner/school).
+model LecturerClassAssignment {
+  id         String   @id @default(cuid())
+  partnerId  String
+  partner    Partner  @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  lecturerId String
+  lecturer   User     @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  classId    String
+  class      Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([lecturerId, classId])
+  @@index([partnerId])
+  @@index([lecturerId])
+  @@index([classId])
+  @@index([partnerId, lecturerId])
+}
+
+model ClassStudent {
+  id        String   @id @default(cuid())
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  studentId String
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([classId, studentId])
+  @@index([studentId])
+  @@index([classId])
+}
+
+model PartnerInvitation {
+  id          String    @id @default(cuid())
+  partnerId   String
+  partner     Partner   @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  email       String
+  token       String    @unique
+  invitedById String
+  invitedBy   User      @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Cascade)
+  classId     String?
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([partnerId, email])
+  @@index([token])
+  @@index([expiresAt])
 }

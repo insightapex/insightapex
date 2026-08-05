@@ -1,11 +1,16 @@
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import { authOptions } from "@/lib/auth";
-
-/**
- * Server-side helpers for protecting App Router pages/route handlers.
- * Use inside Server Components or Route Handlers.
- */
+import { prisma } from "@/lib/prisma";
+import {
+  homePathForRole,
+  isContentAdmin,
+  isContentAdminAllowedPath,
+  isLecturer,
+  isOwner,
+  isPartnerAdmin,
+  isPlatformStaff,
+} from "@/lib/roles";
 
 export async function getCurrentUser() {
   const session = await getServerSession(authOptions);
@@ -15,13 +20,105 @@ export async function getCurrentUser() {
 export async function requireStudent() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  if (user.role === "ADMIN") redirect("/admin");
+  if (isPlatformStaff(user.role) || isPartnerAdmin(user.role) || isLecturer(user.role)) {
+    redirect(homePathForRole(user.role));
+  }
   return user;
 }
 
-export async function requireAdmin() {
+/** OWNER only (full Owner Portal). */
+export async function requireOwner() {
   const user = await getCurrentUser();
   if (!user) redirect("/admin/login");
-  if (user.role !== "ADMIN") redirect("/admin/login");
+  if (!isOwner(user.role)) redirect("/admin/login");
   return user;
+}
+
+/** @deprecated Use requireOwner */
+export async function requireAdmin() {
+  return requireOwner();
+}
+
+/** OWNER or CONTENT_ADMIN — may use Owner Portal shell with restricted routes. */
+export async function requirePlatformStaff(pathname?: string) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/admin/login");
+  if (!isPlatformStaff(user.role)) redirect("/admin/login");
+
+  if (isContentAdmin(user.role) && pathname && !isContentAdminAllowedPath(pathname)) {
+    redirect("/admin/questions");
+  }
+
+  return user;
+}
+
+/** Partner Admin — school-scoped Partner Portal only. */
+export async function requirePartner() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  if (!isPartnerAdmin(user.role)) {
+    redirect(homePathForRole(user.role));
+  }
+
+  const membership = await prisma.partnerMember.findFirst({
+    where: { userId: user.id, role: "PARTNER_ADMIN" },
+    include: {
+      partner: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+          logoUrl: true,
+          contactEmail: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (!membership || membership.partner.status === "SUSPENDED") {
+    redirect("/login?error=partner_suspended");
+  }
+
+  return {
+    user,
+    partner: membership.partner,
+    membershipId: membership.id,
+  };
+}
+
+export async function requireLecturer() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+  if (!isLecturer(user.role)) {
+    redirect(homePathForRole(user.role));
+  }
+
+  const membership = await prisma.partnerMember.findFirst({
+    where: { userId: user.id, role: "LECTURER" },
+    include: {
+      partner: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          status: true,
+          logoUrl: true,
+          contactEmail: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (!membership || membership.partner.status === "SUSPENDED") {
+    redirect("/login?error=lecturer_suspended");
+  }
+
+  return {
+    user,
+    partner: membership.partner,
+    membershipId: membership.id,
+  };
 }

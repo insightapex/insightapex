@@ -11,7 +11,8 @@ export async function GET() {
     totalStudents,
     totalPapers,
     totalQuestions,
-    totalTopics,
+    totalCategories,
+    totalSubCategories,
     mockExamsCreated,
     avgScoreAgg,
     recentStudents,
@@ -24,8 +25,9 @@ export async function GET() {
   ] = await Promise.all([
     prisma.user.count({ where: { role: "STUDENT" } }),
     prisma.paper.count(),
-    prisma.question.count(),
-    prisma.topic.count(),
+    prisma.question.count({ where: { purpose: "PRACTICE" } }),
+    prisma.category.count(),
+    prisma.subCategory.count(),
     prisma.quizAttempt.count({ where: { status: "SUBMITTED" } }),
     prisma.quizAttempt.aggregate({
       where: { status: "SUBMITTED" },
@@ -47,10 +49,15 @@ export async function GET() {
       },
     }),
     prisma.question.findMany({
+      where: { purpose: "PRACTICE" },
       orderBy: { createdAt: "desc" },
       take: 5,
       include: {
-        topic: { include: { paper: { select: { code: true, title: true } } } },
+        subCategory: {
+          include: {
+            category: { include: { paper: { select: { code: true, title: true } } } },
+          },
+        },
         options: { orderBy: { order: "asc" } },
       },
     }),
@@ -72,7 +79,16 @@ export async function GET() {
             responses: {
               select: {
                 isCorrect: true,
-                question: { select: { topic: { select: { title: true } } } },
+                question: {
+                  select: {
+                    subCategory: {
+                      select: {
+                        title: true,
+                        category: { select: { title: true } },
+                      },
+                    },
+                  },
+                },
               },
             },
           },
@@ -82,7 +98,17 @@ export async function GET() {
     prisma.questionResponse.findMany({
       select: {
         isCorrect: true,
-        question: { select: { topic: { select: { id: true, title: true } } } },
+        question: {
+          select: {
+            subCategory: {
+              select: {
+                id: true,
+                title: true,
+                category: { select: { title: true } },
+              },
+            },
+          },
+        },
       },
     }),
     prisma.quizAttempt.groupBy({
@@ -102,26 +128,31 @@ export async function GET() {
 
   const averageStudentScore = Math.round(avgScoreAgg._avg.scorePercent ?? 0);
 
-  // Global weakest topic by accuracy
-  const topicAccuracy: Record<string, { title: string; correct: number; total: number }> = {};
+  const subCategoryAccuracy: Record<string, { title: string; categoryTitle: string; correct: number; total: number }> = {};
   for (const r of allResponses) {
-    const topic = r.question.topic;
-    if (!topicAccuracy[topic.id]) topicAccuracy[topic.id] = { title: topic.title, correct: 0, total: 0 };
-    topicAccuracy[topic.id].total++;
-    if (r.isCorrect) topicAccuracy[topic.id].correct++;
+    const sc = r.question.subCategory;
+    if (!sc) continue;
+    if (!subCategoryAccuracy[sc.id]) {
+      subCategoryAccuracy[sc.id] = { title: sc.title, categoryTitle: sc.category.title, correct: 0, total: 0 };
+    }
+    subCategoryAccuracy[sc.id].total++;
+    if (r.isCorrect) subCategoryAccuracy[sc.id].correct++;
   }
-  const sortedTopics = Object.values(topicAccuracy)
+  const sortedSubCategories = Object.values(subCategoryAccuracy)
     .filter((t) => t.total >= 3)
     .sort((a, b) => a.correct / a.total - b.correct / b.total);
-  const weakestTopic = sortedTopics[0]?.title ?? null;
+  const weakestSubCategory = sortedSubCategories[0]
+    ? `${sortedSubCategories[0].categoryTitle} / ${sortedSubCategories[0].title}`
+    : null;
 
   const recentQuestions = recentQuestionsRaw.map((q) => {
     const correct = q.options.find((o) => o.isCorrect);
     return {
       id: q.id,
       text: q.text.length > 80 ? `${q.text.slice(0, 80)}…` : q.text,
-      paper: q.topic.paper.code,
-      topic: q.topic.title,
+      paper: q.subCategory?.category.paper.code ?? "—",
+      category: q.subCategory?.category.title ?? "—",
+      subCategory: q.subCategory?.title ?? "—",
       difficulty: q.difficulty,
       correctAnswer: correct?.text ?? "—",
       status: q.isActive ? "Active" : "Inactive",
@@ -135,16 +166,18 @@ export async function GET() {
       completed > 0
         ? Math.round(s.attempts.reduce((sum, a) => sum + (a.scorePercent ?? 0), 0) / completed)
         : null;
-    const topicStats: Record<string, { correct: number; total: number }> = {};
+    const subCategoryStats: Record<string, { correct: number; total: number }> = {};
     for (const attempt of s.attempts) {
       for (const resp of attempt.responses) {
-        const title = resp.question.topic.title;
-        if (!topicStats[title]) topicStats[title] = { correct: 0, total: 0 };
-        topicStats[title].total++;
-        if (resp.isCorrect) topicStats[title].correct++;
+        const sc = resp.question.subCategory;
+        if (!sc) continue;
+        const label = `${sc.category.title} / ${sc.title}`;
+        if (!subCategoryStats[label]) subCategoryStats[label] = { correct: 0, total: 0 };
+        subCategoryStats[label].total++;
+        if (resp.isCorrect) subCategoryStats[label].correct++;
       }
     }
-    const weakest = Object.entries(topicStats)
+    const weakest = Object.entries(subCategoryStats)
       .filter(([, v]) => v.total > 0)
       .sort((a, b) => a[1].correct / a[1].total - b[1].correct / b[1].total)[0]?.[0] ?? null;
     const lastActivity = s.attempts[0]?.submittedAt ?? s.updatedAt;
@@ -154,15 +187,15 @@ export async function GET() {
       email: s.email,
       quizzesCompleted: completed,
       averageScore: avgScore,
-      weakestTopic: weakest,
+      weakestSubCategory: weakest,
       lastActivity,
     };
   });
 
-  const mostFailedTopics = Object.values(topicAccuracy)
-    .filter((t) => t.total >= 2)
-    .map((t) => ({
-      topic: t.title,
+  const mostFailedSubCategories = Object.entries(subCategoryAccuracy)
+    .filter(([, t]) => t.total >= 2)
+    .map(([, t]) => ({
+      subCategory: `${t.categoryTitle} / ${t.title}`,
       failRate: Math.round((1 - t.correct / t.total) * 100),
       attempts: t.total,
     }))
@@ -214,10 +247,11 @@ export async function GET() {
     totalStudents,
     totalPapers,
     totalQuestions,
-    totalTopics,
+    totalCategories,
+    totalSubCategories,
     mockExamsCreated,
     averageStudentScore,
-    weakestTopic,
+    weakestSubCategory,
     recentActivity,
     recentStudents,
     recentAttempts: recentAttempts.map((a) => ({
@@ -231,7 +265,7 @@ export async function GET() {
     recentQuestions,
     studentPerformance,
     analytics: {
-      mostFailedTopics,
+      mostFailedSubCategories,
       mostAttemptedPapers,
       questionAccuracyRate,
       progressTrend,

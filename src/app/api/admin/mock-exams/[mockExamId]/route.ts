@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { requireAdminApi } from "@/lib/admin-auth";
+import { requireContentEditorApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
-import { mockExamSchema } from "@/lib/validation/admin-content";
+import { mockExamSchema, mockExamTitleFromPaper } from "@/lib/validation/admin-content";
 
 async function validatePublish(mockExamId: string, status: string) {
   if (status !== "PUBLISHED") return null;
@@ -16,21 +16,36 @@ export async function GET(
   _req: Request,
   { params }: { params: { mockExamId: string } }
 ) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const mockExam = await prisma.mockExam.findUnique({
     where: { id: params.mockExamId },
     include: {
-      paper: { select: { id: true, code: true, title: true } },
+      paper: {
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          partId: true,
+          part: { select: { id: true, code: true, title: true } },
+        },
+      },
       questions: {
         orderBy: { order: "asc" },
         include: {
           question: {
             include: {
-              topic: { include: { paper: { select: { code: true } } } },
-              options: { orderBy: { order: "asc" }, select: { id: true, text: true, isCorrect: true } },
+              subCategory: {
+                include: {
+                  category: { include: { paper: { select: { code: true } } } },
+                },
+              },
+              options: {
+                orderBy: { order: "asc" },
+                select: { id: true, text: true, isCorrect: true },
+              },
             },
           },
         },
@@ -47,7 +62,7 @@ export async function PATCH(
   req: Request,
   { params }: { params: { mockExamId: string } }
 ) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -65,11 +80,36 @@ export async function PATCH(
     return NextResponse.json({ error: publishError }, { status: 400 });
   }
 
+  const paper = await prisma.paper.findUnique({
+    where: { id: parsed.data.paperId },
+    select: { id: true, code: true },
+  });
+  if (!paper) {
+    return NextResponse.json({ error: "Paper not found." }, { status: 400 });
+  }
+
+  const { title: titleInput, ...rest } = parsed.data;
+  const paperChanged = parsed.data.paperId !== existing.paperId;
+  const title =
+    titleInput?.trim() ||
+    (paperChanged ? mockExamTitleFromPaper(paper.code) : existing.title);
+
   const mockExam = await prisma.mockExam.update({
     where: { id: params.mockExamId },
-    data: parsed.data,
+    data: {
+      ...rest,
+      title,
+    },
     include: {
-      paper: { select: { id: true, code: true, title: true } },
+      paper: {
+        select: {
+          id: true,
+          code: true,
+          title: true,
+          partId: true,
+          part: { select: { id: true, code: true, title: true } },
+        },
+      },
       _count: { select: { questions: true } },
     },
   });
@@ -81,7 +121,7 @@ export async function DELETE(
   _req: Request,
   { params }: { params: { mockExamId: string } }
 ) {
-  if (!(await requireAdminApi())) {
+  if (!(await requireContentEditorApi())) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

@@ -19,7 +19,13 @@ export async function GET(req: Request) {
         include: {
           question: {
             include: {
-              topic: { select: { id: true, title: true } },
+              subCategory: {
+                select: {
+                  id: true,
+                  title: true,
+                  category: { select: { id: true, title: true } },
+                },
+              },
               options: { orderBy: { order: "asc" } },
             },
           },
@@ -33,24 +39,39 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Build topic breakdown
-  const topicMap: Record<string, { title: string; correct: number; total: number }> = {};
+  const subCategoryMap: Record<
+    string,
+    { categoryTitle: string; subCategoryTitle: string; correct: number; total: number }
+  > = {};
+
   for (const r of attempt.responses) {
-    const tid: string = r.question.topic.id;
-    if (!topicMap[tid]) topicMap[tid] = { title: r.question.topic.title, correct: 0, total: 0 };
-    topicMap[tid].total++;
-    if (r.isCorrect) topicMap[tid].correct++;
+    const sc = r.question.subCategory;
+    if (!sc) continue;
+    const key = sc.id;
+    if (!subCategoryMap[key]) {
+      subCategoryMap[key] = {
+        categoryTitle: sc.category.title,
+        subCategoryTitle: sc.title,
+        correct: 0,
+        total: 0,
+      };
+    }
+    subCategoryMap[key].total++;
+    if (r.isCorrect) subCategoryMap[key].correct++;
   }
 
-  const topicBreakdown = Object.entries(topicMap).map(([topicId, t]) => ({
-    topicId,
-    topicTitle: t.title,
+  const subCategoryBreakdown = Object.entries(subCategoryMap).map(([subCategoryId, t]) => ({
+    subCategoryId,
+    categoryTitle: t.categoryTitle,
+    subCategoryTitle: t.subCategoryTitle,
     total: t.total,
     correct: t.correct,
     percent: t.total > 0 ? Math.round((t.correct / t.total) * 100) : 0,
   }));
 
-  const weakTopics = topicBreakdown.filter((t) => t.percent < 60).map((t) => t.topicTitle);
+  const weakSubCategories = subCategoryBreakdown
+    .filter((t) => t.percent < 60)
+    .map((t) => `${t.categoryTitle} / ${t.subCategoryTitle}`);
 
   return NextResponse.json({
     attemptId: attempt.id,
@@ -62,25 +83,39 @@ export async function GET(req: Request) {
     passed: attempt.passed,
     submittedAt: attempt.submittedAt,
     durationSec: attempt.durationSec,
-    topicBreakdown,
-    weakTopics,
-    // Full review: each question with selected answer, correct answer, explanation
-    review: attempt.responses.map((r: typeof attempt.responses[0]) => {
-      const correctOption = r.question.options.find((o: { isCorrect: boolean }) => o.isCorrect);
+    subCategoryBreakdown,
+    weakSubCategories,
+    review: attempt.responses.map((r) => {
+      const correctOptions = r.question.options.filter((o) => o.isCorrect);
+      const selectedTexts =
+        r.selectedOptionIds.length > 0
+          ? r.question.options
+              .filter((option) => r.selectedOptionIds.includes(option.id))
+              .map((option) => option.text)
+          : r.selectedOption?.text
+            ? [r.selectedOption.text]
+            : [];
+
       return {
         questionId: r.questionId,
         questionText: r.question.text,
+        questionType: r.question.questionType,
         imageUrl: r.question.imageUrl,
-        topicTitle: r.question.topic.title,
+        categoryTitle: r.question.subCategory?.category.title ?? "Mock exam",
+        subCategoryTitle: r.question.subCategory?.title ?? "Mock exam",
         difficulty: r.question.difficulty,
         selectedOptionId: r.selectedOptionId,
-        selectedOptionText: r.selectedOption?.text ?? null,
-        correctOptionId: correctOption?.id ?? null,
-        correctOptionText: correctOption?.text ?? null,
+        selectedOptionIds: r.selectedOptionIds,
+        selectedOptionText: selectedTexts.join(", ") || null,
+        correctOptionId: correctOptions[0]?.id ?? null,
+        correctOptionText: correctOptions.map((option) => option.text).join(", ") || null,
         isCorrect: r.isCorrect,
         explanation: r.question.explanation,
-        options: r.question.options.map((o: { id: string; text: string; isCorrect: boolean }) => ({
-          id: o.id, text: o.text, isCorrect: o.isCorrect,
+        explanationMy: r.question.explanationMy,
+        options: r.question.options.map((o) => ({
+          id: o.id,
+          text: o.text,
+          isCorrect: o.isCorrect,
         })),
       };
     }),

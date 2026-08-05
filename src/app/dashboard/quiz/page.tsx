@@ -1,125 +1,313 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
+import { PageLoading } from "@/components/ui/PageLoading";
+import { Alert } from "@/components/ui/Alert";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { PracticeOptionsModal, type PracticeStartOptions } from "@/components/dashboard/PracticeOptionsModal";
+import { PracticeJourney } from "@/components/dashboard/PracticeJourney";
+import {
+  QuizPracticePanel,
+  type QuizAnswerValue,
+  type QuizFeatureSettings,
+} from "@/components/dashboard/QuizPracticePanel";
+import type { QuestionType } from "@/lib/question-types";
 import { useTimer } from "@/hooks/useTimer";
-import type { ReviewMode } from "@/lib/practice";
 import { cn } from "@/lib/utils";
 
+interface Part {
+  id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  paperCount: number;
+}
 interface Paper {
   id: string;
   code: string;
   title: string;
-  topicCount: number;
+  categoryCount: number;
+  freeQuestionCount?: number;
+  premiumQuestionCount?: number;
+  totalQuestionCount?: number;
+  accessibleQuestionCount?: number;
+  hasFreeTrialQuestions?: boolean;
+  hasPremiumQuestionAccess?: boolean;
+  isPremiumSubscriber?: boolean;
   isPremium?: boolean;
   isLocked?: boolean;
+  hasNoPracticeQuestions?: boolean;
   hasAccess?: boolean;
 }
-interface Topic { id: string; title: string; questionCount: number; }
-interface QuizOption { id: string; text: string; }
+interface Category {
+  id: string;
+  title: string;
+  subCategoryCount: number;
+}
+interface SubCategory {
+  id: string;
+  title: string;
+  freeQuestionCount: number;
+  premiumQuestionCount: number;
+  totalQuestionCount: number;
+  accessibleQuestionCount: number;
+  questionCount: number;
+}
+interface QuizOption {
+  id: string;
+  text: string;
+  order?: number;
+  label?: string;
+}
 interface QuizQuestion {
   id: string;
   text: string;
-  topicTitle: string;
+  questionType: QuestionType;
+  categoryTitle: string;
+  subCategoryTitle: string;
   options: QuizOption[];
   imageUrl?: string;
   explanation?: string | null;
+  explanationMy?: string | null;
   correctOptionId?: string | null;
+  correctOptionIds?: string[];
 }
 
-type Stage = "select-paper" | "select-topic" | "quiz" | "submitting";
-type ModalTarget = { type: "mixed" } | { type: "topic"; topic: Topic };
+type Stage = "select-part" | "select-paper" | "select-category" | "select-subcategory" | "quiz" | "submitting";
 
 export default function QuizPage() {
   const router = useRouter();
-  const [stage, setStage] = useState<Stage>("select-paper");
+  const [stage, setStage] = useState<Stage>("select-part");
+  const [parts, setParts] = useState<Part[]>([]);
+  const [partsLoading, setPartsLoading] = useState(true);
   const [papers, setPapers] = useState<Paper[]>([]);
-  const [topics, setTopics] = useState<Topic[]>([]);
-  const [totalQuestionCount, setTotalQuestionCount] = useState(0);
-  const [topicsLoading, setTopicsLoading] = useState(false);
+  const [papersLoading, setPapersLoading] = useState(false);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [subCategories, setSubCategories] = useState<SubCategory[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  const [subCategoriesLoading, setSubCategoriesLoading] = useState(false);
+  const [selectedPart, setSelectedPart] = useState<Part | null>(null);
   const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null);
-  const [selectedTopic, setSelectedTopic] = useState<Topic | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
+  const [selectedSubCategory, setSelectedSubCategory] = useState<SubCategory | null>(null);
 
-  const [modalTarget, setModalTarget] = useState<ModalTarget | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [startLoading, setStartLoading] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   const [attemptId, setAttemptId] = useState<string>("");
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [current, setCurrent] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string | null>>({});
+  const [answers, setAnswers] = useState<Record<string, QuizAnswerValue>>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
+  const [timerPaused, setTimerPaused] = useState(false);
   const [durationSeconds, setDurationSeconds] = useState(0);
-  const [reviewMode, setReviewMode] = useState<ReviewMode>("at_end");
+  const [quizFeatures, setQuizFeatures] = useState<QuizFeatureSettings>({});
   const [startTime, setStartTime] = useState<number>(0);
 
+  const [partsError, setPartsError] = useState<string | null>(null);
+  const [papersError, setPapersError] = useState<string | null>(null);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const deepLinkApplied = useRef(false);
+
   useEffect(() => {
-    fetch("/api/papers").then((r) => r.json()).then(setPapers);
+    setPartsLoading(true);
+    setPartsError(null);
+    fetch("/api/parts", { cache: "no-store" })
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error ?? "Could not load parts");
+        if (!Array.isArray(data)) throw new Error("Invalid parts response");
+        setParts(data);
+      })
+      .catch((err) => {
+        setParts([]);
+        setPartsError(err instanceof Error ? err.message : "Could not load parts");
+      })
+      .finally(() => setPartsLoading(false));
   }, []);
 
-  async function selectPaper(paper: Paper) {
-    if (paper.isLocked) {
-      router.push("/dashboard/pricing");
-      return;
-    }
-
-    setSelectedPaper(paper);
-    setTopics([]);
-    setTotalQuestionCount(0);
-    setTopicsLoading(true);
-    setStage("select-topic");
+  async function selectPart(part: Part) {
+    setSelectedPart(part);
+    setSelectedPaper(null);
+    setSelectedCategory(null);
+    setSelectedSubCategory(null);
+    setCategories([]);
+    setSubCategories([]);
+    setPapers([]);
+    setPapersLoading(true);
+    setPapersError(null);
+    setStage("select-paper");
 
     try {
-      const res = await fetch(`/api/papers/${paper.id}/topics`);
+      const res = await fetch(`/api/papers?partId=${part.id}`, { cache: "no-store" });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not load topics");
-      const topicList: Topic[] = Array.isArray(data) ? data : data.topics ?? [];
-      setTopics(topicList);
-      setTotalQuestionCount(topicList.reduce((sum, t) => sum + t.questionCount, 0));
-    } catch {
-      setTopics([]);
-      setTotalQuestionCount(0);
+      if (!res.ok) throw new Error(data.error ?? "Could not load papers");
+      setPapers(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setPapers([]);
+      setPapersError(err instanceof Error ? err.message : "Could not load papers");
     } finally {
-      setTopicsLoading(false);
+      setPapersLoading(false);
     }
   }
 
-  function openPracticeModal(target: ModalTarget) {
-    setStartError(null);
-    setModalTarget(target);
-    if (target.type === "topic") {
-      setSelectedTopic(target.topic);
-    } else {
-      setSelectedTopic(null);
+  async function selectPaper(paper: Paper) {
+    if (paper.isLocked) return;
+
+    setSelectedPaper(paper);
+    setSelectedCategory(null);
+    setSelectedSubCategory(null);
+    setCategories([]);
+    setSubCategories([]);
+    setCategoriesLoading(true);
+    setCategoriesError(null);
+    setStage("select-category");
+
+    try {
+      const res = await fetch(`/api/papers/${paper.id}/categories`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not load categories");
+      const categoryList: Category[] = Array.isArray(data) ? data : data.categories ?? [];
+      setCategories(categoryList);
+    } catch (err) {
+      setCategories([]);
+      setCategoriesError(err instanceof Error ? err.message : "Could not load categories");
+    } finally {
+      setCategoriesLoading(false);
     }
+  }
+
+  async function selectCategory(category: Category) {
+    setSelectedCategory(category);
+    setSelectedSubCategory(null);
+    setSubCategories([]);
+    setSubCategoriesLoading(true);
+    setStage("select-subcategory");
+
+    try {
+      const res = await fetch(`/api/categories/${category.id}/subcategories`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not load sub categories");
+      const subCategoryList: SubCategory[] = Array.isArray(data) ? data : data.subCategories ?? [];
+      setSubCategories(subCategoryList);
+    } catch {
+      setSubCategories([]);
+    } finally {
+      setSubCategoriesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (deepLinkApplied.current || partsLoading || parts.length === 0) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const partId = params.get("partId");
+    const paperId = params.get("paperId");
+    const categoryId = params.get("categoryId");
+    const subCategoryId = params.get("subCategoryId");
+
+    if (!partId && !paperId) return;
+
+    deepLinkApplied.current = true;
+
+    async function applyDeepLink() {
+      try {
+        let part = partId ? parts.find((p) => p.id === partId) ?? null : null;
+
+        if (!part && paperId) {
+          const allPapersRes = await fetch("/api/papers");
+          const allPapers = await allPapersRes.json();
+          if (Array.isArray(allPapers)) {
+            const match = allPapers.find((p: Paper & { partId?: string }) => p.id === paperId);
+            if (match?.partId) {
+              part = parts.find((p) => p.id === match.partId) ?? null;
+            }
+          }
+        }
+
+        if (!part) return;
+
+        setSelectedPart(part);
+        setPapersLoading(true);
+        setPapersError(null);
+        setStage("select-paper");
+
+        const papersRes = await fetch(`/api/papers?partId=${part.id}`, { cache: "no-store" });
+        const papersData = await papersRes.json();
+        if (!papersRes.ok) throw new Error(papersData.error ?? "Could not load papers");
+        const paperList: Paper[] = Array.isArray(papersData) ? papersData : [];
+        setPapers(paperList);
+        setPapersLoading(false);
+
+        if (!paperId) return;
+
+        const paper = paperList.find((p) => p.id === paperId);
+        if (!paper || paper.isLocked) return;
+
+        setSelectedPaper(paper);
+        setCategoriesLoading(true);
+        setCategoriesError(null);
+        setStage("select-category");
+
+        const catRes = await fetch(`/api/papers/${paper.id}/categories`);
+        const catData = await catRes.json();
+        if (!catRes.ok) throw new Error(catData.error ?? "Could not load categories");
+        const categoryList: Category[] = Array.isArray(catData) ? catData : catData.categories ?? [];
+        setCategories(categoryList);
+        setCategoriesLoading(false);
+
+        if (!categoryId) return;
+
+        const category = categoryList.find((c) => c.id === categoryId);
+        if (!category) return;
+
+        setSelectedCategory(category);
+        setSubCategoriesLoading(true);
+        setStage("select-subcategory");
+
+        const subRes = await fetch(`/api/categories/${category.id}/subcategories`);
+        const subData = await subRes.json();
+        if (!subRes.ok) throw new Error(subData.error ?? "Could not load sub categories");
+        const subList: SubCategory[] = Array.isArray(subData) ? subData : subData.subCategories ?? [];
+        setSubCategories(subList);
+        setSubCategoriesLoading(false);
+
+        if (!subCategoryId) return;
+
+        const sub = subList.find((s) => s.id === subCategoryId);
+        if (!sub || sub.accessibleQuestionCount === 0) return;
+
+        setSelectedSubCategory(sub);
+        setModalOpen(true);
+      } catch {
+        // Deep link is best-effort; user can still browse manually.
+      }
+    }
+
+    void applyDeepLink();
+  }, [partsLoading, parts]);
+
+  function openPracticeModal(subCategory: SubCategory) {
+    setSelectedSubCategory(subCategory);
+    setStartError(null);
+    setModalOpen(true);
   }
 
   function closePracticeModal() {
     if (startLoading) return;
-    setModalTarget(null);
+    setModalOpen(false);
     setStartError(null);
   }
 
-  function getModalAvailableCount(): number {
-    if (!modalTarget) return 0;
-    if (modalTarget.type === "mixed") return totalQuestionCount;
-    return modalTarget.topic.questionCount;
-  }
-
-  function getModalTopicTitle(): string {
-    if (!modalTarget) return "";
-    if (modalTarget.type === "mixed") return "All topics mixed";
-    return modalTarget.topic.title;
-  }
-
   async function startQuiz(options: PracticeStartOptions) {
-    if (!selectedPaper) return;
+    if (!selectedPaper || !selectedSubCategory) return;
 
     setStartLoading(true);
     setStartError(null);
@@ -130,10 +318,10 @@ export default function QuizPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           paperId: selectedPaper.id,
-          topicId: selectedTopic?.id,
+          subCategoryId: selectedSubCategory.id,
           limit: options.questionCount,
           durationSeconds: options.durationSeconds,
-          reviewMode: options.reviewMode,
+          reviewMode: "at_end",
         }),
       });
       const data = await res.json();
@@ -149,12 +337,13 @@ export default function QuizPage() {
       setAttemptId(data.attemptId);
       setQuestions(data.questions);
       setDurationSeconds(data.durationSeconds ?? 0);
-      setReviewMode(data.reviewMode ?? "at_end");
+      setQuizFeatures(data.quizSettings ?? {});
       setStartTime(Date.now());
       setAnswers({});
       setFlagged(new Set());
+      setTimerPaused(false);
       setCurrent(0);
-      setModalTarget(null);
+      setModalOpen(false);
       setStage("quiz");
     } catch {
       setStartError("Something went wrong. Please try again.");
@@ -163,126 +352,326 @@ export default function QuizPage() {
     }
   }
 
+  function handleSelectOption(questionId: string, optionId: string, questionType: QuestionType) {
+    setAnswers((prev) => {
+      const q = questions.find((item) => item.id === questionId);
+      const correctCount = q?.correctOptionIds?.length ?? 0;
+      const multiFromData = correctCount > 1 || questionType === "MULTIPLE_CHOICE";
+      if (multiFromData) {
+        const current = Array.isArray(prev[questionId])
+          ? prev[questionId]
+          : typeof prev[questionId] === "string" && prev[questionId]
+            ? [prev[questionId] as string]
+            : [];
+        // Toggle off if already selected
+        if (current.includes(optionId)) {
+          return { ...prev, [questionId]: current.filter((id) => id !== optionId) };
+        }
+        // Cap at number of correct answers (usually 2). At the limit, replace
+        // the oldest pick so students can change an answer without deselecting first.
+        const maxSelect = correctCount > 1 ? correctCount : 2;
+        if (current.length >= maxSelect) {
+          return { ...prev, [questionId]: [...current.slice(1), optionId] };
+        }
+        return { ...prev, [questionId]: [...current, optionId] };
+      }
+      return { ...prev, [questionId]: optionId };
+    });
+  }
+
   const submitQuiz = useCallback(async () => {
     if (stage === "submitting") return;
     setStage("submitting");
+    setSubmitError(null);
     const elapsed = Math.round((Date.now() - startTime) / 1000);
-    const payload = questions.map((q) => ({
-      questionId: q.id,
-      selectedOptionId: answers[q.id] ?? null,
-    }));
-    await fetch("/api/quiz/submit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ attemptId, answers: payload, durationSec: elapsed }),
+    const payload = questions.map((q) => {
+      const answer = answers[q.id];
+      const isMulti =
+        q.questionType === "MULTIPLE_CHOICE" || (q.correctOptionIds?.length ?? 0) > 1;
+      if (isMulti) {
+        const ids = Array.isArray(answer)
+          ? answer
+          : typeof answer === "string" && answer
+            ? [answer]
+            : [];
+        return {
+          questionId: q.id,
+          selectedOptionId: null,
+          selectedOptionIds: ids,
+        };
+      }
+      return {
+        questionId: q.id,
+        selectedOptionId: typeof answer === "string" ? answer : null,
+        selectedOptionIds: [],
+      };
     });
-    router.push(`/dashboard/quiz/result?attemptId=${attemptId}`);
+    try {
+      const res = await fetch("/api/quiz/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attemptId, answers: payload, durationSec: elapsed }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error ?? "Could not submit quiz.");
+      }
+      router.push(`/dashboard/quiz/result?attemptId=${attemptId}`);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Could not submit quiz.");
+      setStage("quiz");
+    }
   }, [stage, answers, questions, attemptId, startTime, router]);
 
-  const { formatted, isLow } = useTimer(durationSeconds, durationSeconds > 0 ? submitQuiz : undefined);
+  const { formatted, isLow } = useTimer(
+    durationSeconds,
+    durationSeconds > 0 ? submitQuiz : undefined,
+    timerPaused
+  );
 
   const q = questions[current];
-  const answered = Object.keys(answers).length;
-  const modalOpen = modalTarget !== null && selectedPaper !== null;
+
+  function toggleFlag(questionId: string) {
+    setFlagged((prev) => {
+      const next = new Set(prev);
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
+      return next;
+    });
+  }
+
+  const isPremiumSubscriber = papers.some((p) => p.isPremiumSubscriber);
+
+  /* ---------- PART SELECTION ---------- */
+  if (stage === "select-part") {
+    return (
+      <div className="space-y-6">
+        <PracticeJourney
+          steps={[{ label: "Practice" }]}
+          currentStep={0}
+          title="Practice"
+          description="Choose an ACCA qualification part to begin your journey."
+        />
+
+        {partsLoading ? (
+          <PageLoading message="Loading parts…" className="h-40" />
+        ) : partsError ? (
+          <Alert tone="error">{partsError}</Alert>
+        ) : parts.length === 0 ? (
+          <EmptyState
+            compact
+            title="No parts available"
+            description="ACCA parts will appear here once your admin adds them."
+          />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {parts.map((part) => (
+              <button
+                key={part.id}
+                onClick={() => selectPart(part)}
+                disabled={part.paperCount === 0}
+                className={cn(
+                  "rounded-xl border bg-white p-5 text-left shadow-card transition-all",
+                  part.paperCount === 0
+                    ? "cursor-not-allowed border-slate-200 opacity-60"
+                    : "border-slate-200 hover:border-brand-300 hover:shadow-panel"
+                )}
+              >
+                <div className="text-lg font-bold text-brand-600">{part.title}</div>
+                <div className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-400">
+                  {part.code.replace("_", " ")}
+                </div>
+                {part.description && (
+                  <p className="mt-2 text-sm text-slate-500 line-clamp-2">{part.description}</p>
+                )}
+                <div className="mt-3 text-xs font-medium text-slate-600">
+                  {part.paperCount} paper{part.paperCount === 1 ? "" : "s"}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   /* ---------- PAPER SELECTION ---------- */
   if (stage === "select-paper") {
     return (
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold text-ink-900">Practice</h1>
-          <p className="mt-1 text-sm text-slate-500">Choose an ACCA paper to practise.</p>
-        </div>
+        <PracticeJourney
+          steps={[
+            { label: "Parts", onClick: () => setStage("select-part") },
+            { label: selectedPart?.title ?? "Paper" },
+          ]}
+          currentStep={1}
+          title={selectedPart?.title ?? "Select Paper"}
+          description="Choose a paper to practise."
+        />
+
+          {isPremiumSubscriber && (
+            <p className="text-sm font-medium text-emerald-700">
+              Premium subscriber — full access to all questions on every paper.
+            </p>
+          )}
+
+        {papersLoading ? (
+          <PageLoading message="Loading papers…" className="h-40" />
+        ) : papersError ? (
+          <Alert tone="error">{papersError}</Alert>
+        ) : papers.length === 0 ? (
+          <EmptyState compact title="No papers available" description="No papers are available for this part yet." />
+        ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {papers.map((p) => (
+          {papers.map((p) => {
+            const unavailable = Boolean(p.hasNoPracticeQuestions) || (p.accessibleQuestionCount ?? 0) === 0;
+            const paywalled = Boolean(p.isLocked);
+            return (
             <button
               key={p.id}
               onClick={() => selectPaper(p)}
+              disabled={unavailable}
               className={cn(
                 "relative rounded-xl border bg-white p-5 text-left shadow-card transition-all",
-                p.isLocked
-                  ? "border-slate-200 hover:border-amber-300"
+                unavailable
+                  ? "cursor-not-allowed border-slate-200 opacity-70"
                   : "border-slate-200 hover:border-brand-300 hover:shadow-panel"
               )}
             >
-              {p.isLocked && (
+              {paywalled && (
                 <span className="absolute right-3 top-3">
                   <Badge tone="warning">🔒 Locked</Badge>
                 </span>
               )}
-              {p.isPremium && !p.isLocked && (
+              {!unavailable && p.hasPremiumQuestionAccess && (
                 <span className="absolute right-3 top-3">
-                  <Badge tone="brand">Premium</Badge>
+                  <Badge tone="success">Full access</Badge>
+                </span>
+              )}
+              {!unavailable && !p.hasPremiumQuestionAccess && p.hasFreeTrialQuestions && (
+                <span className="absolute right-3 top-3">
+                  <Badge tone="success">Free trial</Badge>
                 </span>
               )}
               <div className="text-2xl font-bold text-brand-600">{p.code}</div>
               <div className="mt-1 text-sm font-medium text-slate-800">{p.title}</div>
-              <div className="mt-2 text-xs text-slate-400">{p.topicCount} topics</div>
-              {p.isLocked && (
-                <p className="mt-2 text-xs font-medium text-amber-600">Upgrade to unlock</p>
+              <div className="mt-2 text-xs text-slate-400">{p.categoryCount} categories</div>
+              {!unavailable && (p.accessibleQuestionCount ?? 0) > 0 && (
+                <div className="mt-2 text-xs font-medium text-slate-600">
+                  {p.accessibleQuestionCount} question{(p.accessibleQuestionCount ?? 0) === 1 ? "" : "s"} available to you
+                </div>
+              )}
+              {!unavailable && !p.hasPremiumQuestionAccess && (p.premiumQuestionCount ?? 0) > 0 && (
+                <div className="mt-1 text-xs text-slate-400">
+                  Free {p.freeQuestionCount ?? 0} · Premium {p.premiumQuestionCount ?? 0} locked
+                </div>
+              )}
+              {paywalled && (
+                <p className="mt-2 text-xs font-medium text-amber-600">
+                  Premium required —{" "}
+                  <Link href="/dashboard/pricing" className="underline hover:text-amber-700">
+                    upgrade to unlock
+                  </Link>
+                </p>
+              )}
+              {p.hasNoPracticeQuestions && !paywalled && (
+                <p className="mt-2 text-xs font-medium text-amber-600">No practice questions available</p>
               )}
             </button>
-          ))}
+            );
+          })}
         </div>
-        <p className="text-center text-sm text-slate-500">
-          Need premium access?{" "}
-          <Link href="/dashboard/pricing" className="font-medium text-brand-600 hover:text-brand-700">
-            View pricing
-          </Link>
-        </p>
+        )}
+        {!isPremiumSubscriber && (
+          <p className="text-center text-sm text-slate-500">
+            Need premium access?{" "}
+            <Link href="/dashboard/pricing" className="font-medium text-brand-600 hover:text-brand-700">
+              View pricing
+            </Link>
+          </p>
+        )}
       </div>
     );
   }
 
-  /* ---------- TOPIC SELECTION ---------- */
-  if (stage === "select-topic") {
-    const mixedDisabled = totalQuestionCount === 0;
+  /* ---------- CATEGORY SELECTION ---------- */
+  if (stage === "select-category") {
+    return (
+      <div className="space-y-6">
+        <PracticeJourney
+          steps={[
+            { label: "Parts", onClick: () => setStage("select-part") },
+            { label: selectedPart?.title ?? "Part", onClick: () => setStage("select-paper") },
+            { label: selectedPaper?.code ?? "Category" },
+          ]}
+          currentStep={2}
+          title={`${selectedPaper?.code} – ${selectedPaper?.title}`}
+          description="Pick a category to continue."
+        />
 
+        {categoriesLoading ? (
+          <PageLoading message="Loading categories…" className="h-40" />
+        ) : categoriesError ? (
+          <Alert tone="error">{categoriesError}</Alert>
+        ) : categories.length === 0 ? (
+          <EmptyState
+            compact
+            title="No categories yet"
+            description="No categories are available for this paper yet."
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {categories.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => selectCategory(c)}
+                className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-card transition-colors hover:border-brand-300"
+              >
+                <div className="font-medium text-slate-800">{c.title}</div>
+                <div className="mt-2 text-xs font-medium text-slate-500">
+                  {c.subCategoryCount} sub categor{c.subCategoryCount === 1 ? "y" : "ies"}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ---------- SUB CATEGORY SELECTION ---------- */
+  if (stage === "select-subcategory") {
     return (
       <>
         <div className="space-y-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <button onClick={() => setStage("select-paper")} className="text-sm text-brand-600 hover:underline">
-              ← Papers
-            </button>
-            <h1 className="text-2xl font-bold text-ink-900">
-              {selectedPaper?.code} – {selectedPaper?.title}
-            </h1>
-          </div>
-          <p className="text-sm text-slate-500">Pick a topic or practise all topics mixed.</p>
+          <PracticeJourney
+            steps={[
+              { label: "Parts", onClick: () => setStage("select-part") },
+              { label: selectedPart?.title ?? "Part", onClick: () => setStage("select-paper") },
+              { label: selectedPaper?.code ?? "Paper", onClick: () => setStage("select-category") },
+              { label: selectedCategory?.title ?? "Topic" },
+            ]}
+            currentStep={3}
+            title={selectedCategory?.title ?? "Select Topic"}
+            description="Pick a sub category to start practising."
+          />
 
-          {topicsLoading ? (
-            <div className="flex h-40 items-center justify-center gap-2 text-sm text-slate-500">
-              <Spinner className="h-5 w-5 text-brand-600" />
-              Loading topics…
-            </div>
+          {subCategoriesLoading ? (
+            <PageLoading message="Loading sub categories…" className="h-40" />
+          ) : subCategories.length === 0 ? (
+            <EmptyState
+              compact
+              title="No sub categories yet"
+              description="No sub categories are available for this category yet."
+            />
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
-              <button
-                onClick={() => !mixedDisabled && openPracticeModal({ type: "mixed" })}
-                disabled={mixedDisabled}
-                className={cn(
-                  "rounded-xl border-2 p-4 text-left transition-colors",
-                  mixedDisabled
-                    ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-60"
-                    : "border-brand-200 bg-brand-50 hover:border-brand-400"
-                )}
-              >
-                <div className="font-semibold text-brand-700">All topics mixed</div>
-                <div className="mt-1 text-sm text-slate-500">Random questions from all chapters</div>
-                <div className="mt-2 text-xs font-medium text-slate-500">
-                  {mixedDisabled
-                    ? "No questions available yet"
-                    : `${totalQuestionCount} question${totalQuestionCount === 1 ? "" : "s"} available`}
-                </div>
-              </button>
-
-              {topics.map((t) => {
-                const disabled = t.questionCount === 0;
+              {subCategories.map((sc) => {
+                const disabled = sc.accessibleQuestionCount === 0;
                 return (
                   <button
-                    key={t.id}
-                    onClick={() => !disabled && openPracticeModal({ type: "topic", topic: t })}
+                    key={sc.id}
+                    onClick={() => !disabled && openPracticeModal(sc)}
                     disabled={disabled}
                     className={cn(
                       "rounded-xl border p-4 text-left shadow-card transition-colors",
@@ -291,11 +680,15 @@ export default function QuizPage() {
                         : "border-slate-200 bg-white hover:border-brand-300"
                     )}
                   >
-                    <div className="font-medium text-slate-800">{t.title}</div>
+                    <div className="font-medium text-slate-800">{sc.title}</div>
                     <div className="mt-2 text-xs font-medium text-slate-500">
                       {disabled
-                        ? "No questions available yet"
-                        : `${t.questionCount} question${t.questionCount === 1 ? "" : "s"} available`}
+                        ? sc.totalQuestionCount > 0
+                          ? sc.premiumQuestionCount > 0 && sc.freeQuestionCount === 0
+                            ? "Premium questions only — upgrade required"
+                            : "No active practice questions yet"
+                        : "No practice questions available"
+                        : `${sc.accessibleQuestionCount} available · Free ${sc.freeQuestionCount} · Premium ${sc.premiumQuestionCount} · Total ${sc.totalQuestionCount}`}
                     </div>
                   </button>
                 );
@@ -304,13 +697,17 @@ export default function QuizPage() {
           )}
         </div>
 
-        {selectedPaper && (
+        {selectedPaper && selectedSubCategory && (
           <PracticeOptionsModal
             open={modalOpen}
             onClose={closePracticeModal}
             paper={{ code: selectedPaper.code, title: selectedPaper.title }}
-            topicTitle={getModalTopicTitle()}
-            availableCount={getModalAvailableCount()}
+            subCategoryTitle={selectedSubCategory.title}
+            freeQuestionCount={selectedSubCategory.freeQuestionCount}
+            premiumQuestionCount={selectedSubCategory.premiumQuestionCount}
+            totalQuestionCount={selectedSubCategory.totalQuestionCount}
+            availableCount={selectedSubCategory.accessibleQuestionCount}
+            hasPremiumAccess={selectedPaper.hasPremiumQuestionAccess}
             loading={startLoading}
             error={startError}
             onStart={startQuiz}
@@ -322,151 +719,27 @@ export default function QuizPage() {
 
   /* ---------- QUIZ ENGINE ---------- */
   if (stage === "quiz" && q) {
-    const selectedAnswer = answers[q.id];
-    const showExplanation =
-      reviewMode === "after_each" && selectedAnswer && (q.explanation || q.correctOptionId);
-
     return (
-      <div className="space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm text-slate-500">
-            Question <span className="font-semibold text-slate-800">{current + 1}</span> of{" "}
-            <span className="font-semibold">{questions.length}</span>
-          </div>
-          <div
-            className={cn(
-              "w-fit rounded-lg px-4 py-1.5 text-sm font-bold",
-              durationSeconds > 0
-                ? isLow
-                  ? "bg-red-50 text-red-600"
-                  : "bg-slate-100 text-slate-700"
-                : "bg-slate-100 text-slate-500"
-            )}
-          >
-            {durationSeconds > 0 ? `⏱ ${formatted}` : "Untimed"}
-          </div>
-          <div className="text-sm text-slate-500">
-            Answered: {answered}/{questions.length}
-          </div>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1">
-                <div className="mb-2">
-                  <span className="text-xs text-slate-400">{q.topicTitle}</span>
-                </div>
-                <p className="text-base font-medium leading-relaxed text-slate-800">{q.text}</p>
-              </div>
-              <button
-                onClick={() =>
-                  setFlagged((prev) => {
-                    const n = new Set(prev);
-                    n.has(q.id) ? n.delete(q.id) : n.add(q.id);
-                    return n;
-                  })
-                }
-                className={cn(
-                  "shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                  flagged.has(q.id)
-                    ? "bg-amber-100 text-amber-700"
-                    : "bg-slate-100 text-slate-500 hover:bg-amber-50"
-                )}
-              >
-                {flagged.has(q.id) ? "⚑ Flagged" : "⚐ Flag"}
-              </button>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-3">
-            {q.options.map((opt, idx) => {
-              const selected = answers[q.id] === opt.id;
-              const isCorrect = reviewMode === "after_each" && selectedAnswer && opt.id === q.correctOptionId;
-              const isWrong =
-                reviewMode === "after_each" &&
-                selectedAnswer === opt.id &&
-                q.correctOptionId &&
-                opt.id !== q.correctOptionId;
-
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => setAnswers({ ...answers, [q.id]: opt.id })}
-                  className={cn(
-                    "flex w-full items-center gap-4 rounded-xl border-2 p-4 text-left text-sm transition-all",
-                    isCorrect && "border-emerald-500 bg-emerald-50",
-                    isWrong && "border-red-400 bg-red-50",
-                    !isCorrect && !isWrong && selected && "border-brand-500 bg-brand-50",
-                    !isCorrect && !isWrong && !selected && "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold",
-                      selected ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"
-                    )}
-                  >
-                    {["A", "B", "C", "D"][idx]}
-                  </span>
-                  <span className={selected ? "font-medium text-brand-800" : "text-slate-700"}>{opt.text}</span>
-                </button>
-              );
-            })}
-
-            {showExplanation && (
-              <div className="mt-2 rounded-xl border border-brand-100 bg-brand-50/60 px-4 py-3 text-sm text-slate-700">
-                <p className="font-medium text-brand-800">Explanation</p>
-                <p className="mt-1">
-                  {q.explanation ?? "No explanation provided for this question."}
-                </p>
-              </div>
-            )}
-          </CardBody>
-        </Card>
-
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <Button variant="outline" disabled={current === 0} onClick={() => setCurrent(current - 1)}>
-            ← Previous
-          </Button>
-          <div className="flex flex-wrap justify-center gap-2">
-            {questions.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => setCurrent(i)}
-                className={cn(
-                  "h-7 w-7 rounded-full text-xs font-medium transition-colors",
-                  i === current
-                    ? "bg-brand-600 text-white"
-                    : answers[questions[i].id]
-                      ? "bg-emerald-100 text-emerald-700"
-                      : flagged.has(questions[i].id)
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-                )}
-              >
-                {i + 1}
-              </button>
-            ))}
-          </div>
-          {current < questions.length - 1 ? (
-            <Button onClick={() => setCurrent(current + 1)}>Next →</Button>
-          ) : (
-            <Button variant="secondary" onClick={submitQuiz}>
-              Submit Quiz
-            </Button>
-          )}
-        </div>
-      </div>
+      <QuizPracticePanel
+        questions={questions}
+        current={current}
+        onCurrentChange={setCurrent}
+        answers={answers}
+        onAnswer={handleSelectOption}
+        flagged={flagged}
+        onToggleFlag={toggleFlag}
+        durationLabel={durationSeconds > 0 ? `⏱ ${formatted}` : "Untimed"}
+        durationLow={durationSeconds > 0 ? isLow : false}
+        onSubmit={submitQuiz}
+        submitError={submitError}
+        onTimerPausedChange={setTimerPaused}
+        features={quizFeatures}
+      />
     );
   }
 
   if (stage === "submitting") {
-    return (
-      <div className="flex h-64 flex-col items-center justify-center gap-2 text-sm text-slate-500">
-        <Spinner className="h-6 w-6 text-brand-600" />
-        Grading your answers…
-      </div>
-    );
+    return <PageLoading message="Grading your answers…" />;
   }
 
   return null;

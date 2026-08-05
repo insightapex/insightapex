@@ -32,6 +32,7 @@ export async function createSubscriptionCheckout(
     planId: plan.id,
     productId: "",
     purchaseType: "SUBSCRIPTION",
+    checkoutType: "subscription",
     type: "subscription",
   };
 
@@ -47,6 +48,7 @@ export async function createSubscriptionCheckout(
         planId: plan.id,
         productId: "",
         purchaseType: "SUBSCRIPTION",
+        checkoutType: "subscription",
       },
     },
     metadata,
@@ -90,6 +92,7 @@ export async function createProductCheckout(
     metadata: {
       userId,
       type: checkoutType,
+      checkoutType,
       planId: "",
       productId: product.id,
       purchaseType,

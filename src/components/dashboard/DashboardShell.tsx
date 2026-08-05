@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { DashboardSidebar } from "@/components/dashboard/DashboardSidebar";
-import { DashboardTopBar } from "@/components/dashboard/DashboardTopBar";
+import { useEffect, useState } from "react";
+import { FloatingNav } from "@/components/layout/FloatingNav";
+import { AppTopBar } from "@/components/layout/AppTopBar";
+import { cn } from "@/lib/utils";
 
 interface DashboardShellProps {
   userName: string;
@@ -11,22 +12,59 @@ interface DashboardShellProps {
 
 export function DashboardShell({ userName, children }: DashboardShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [isPremium, setIsPremium] = useState(false);
+  const [studyStreak, setStudyStreak] = useState(0);
+
+  useEffect(() => {
+    fetch("/api/billing/dashboard", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        const status = data.subscription?.status;
+        setIsPremium(status === "ACTIVE" || status === "TRIALING");
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/dashboard")
+      .then((r) => r.json())
+      .then((data) => setStudyStreak(data.studyStreak ?? 0))
+      .catch(() => {});
+  }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f4f6fa]">
-      <DashboardSidebar mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
-
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DashboardTopBar
-          userName={userName}
-          showMenuButton
-          onMenuOpen={() => setMobileOpen(true)}
-        />
-
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">{children}</div>
-        </main>
+    <div className="relative min-h-screen bg-gradient-surface">
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-accent-200/20 blur-3xl" />
+        <div className="absolute -right-32 top-1/3 h-80 w-80 rounded-full bg-brand-200/20 blur-3xl" />
       </div>
+
+      {/* Full-width header — not shifted by sidebar */}
+      <AppTopBar
+        userName={userName}
+        sidebarExpanded={sidebarExpanded}
+        onToggleSidebar={() => setSidebarExpanded((v) => !v)}
+        onMenuOpen={() => setMobileOpen(true)}
+        studyStreak={studyStreak}
+      />
+
+      <FloatingNav
+        expanded={sidebarExpanded}
+        mobileOpen={mobileOpen}
+        onClose={() => setMobileOpen(false)}
+        isPremium={isPremium}
+      />
+
+      {/* Content — capped width so large screens keep side breathing room */}
+      <main
+        className={cn(
+          "relative min-w-0 transition-[padding-left] duration-300",
+          sidebarExpanded ? "lg:pl-[256px]" : "lg:pl-[76px]"
+        )}
+      >
+        <div className="dashboard-page-container animate-fade-in">{children}</div>
+      </main>
     </div>
   );
 }

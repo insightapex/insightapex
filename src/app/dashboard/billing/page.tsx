@@ -5,7 +5,11 @@ import Link from "next/link";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { Spinner } from "@/components/ui/Spinner";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { PageLoading } from "@/components/ui/PageLoading";
+import { Alert } from "@/components/ui/Alert";
+import { Table, TableHead, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/Table";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { formatPrice } from "@/lib/format-price";
 
 interface BillingData {
@@ -42,24 +46,35 @@ interface BillingData {
 export default function BillingPage() {
   const [data, setData] = useState<BillingData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/billing/dashboard")
-      .then((r) => r.json())
-      .then(setData)
+    fetch("/api/billing/dashboard", { cache: "no-store" })
+      .then(async (res) => {
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? "Could not load billing data.");
+        setData(json);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Could not load billing data.");
+      })
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) {
+    return <PageLoading message="Loading billing…" />;
+  }
+
+  if (error || !data) {
     return (
-      <div className="flex h-64 items-center justify-center gap-2 text-sm text-slate-500">
-        <Spinner className="h-5 w-5 text-brand-600" />
-        Loading billing…
+      <div className="space-y-4">
+        <PageHeader title="Billing" description="Manage your subscription and view purchase history." />
+        <Alert tone="error" title="Unable to load billing">
+          {error ?? "Something went wrong. Please refresh the page."}
+        </Alert>
       </div>
     );
   }
-
-  if (!data) return null;
 
   const statusTone = (status: string) => {
     if (status === "ACTIVE" || status === "COMPLETED") return "success" as const;
@@ -69,15 +84,17 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-ink-900">Billing</h1>
-          <p className="mt-1 text-sm text-slate-500">Manage your subscription and view purchase history.</p>
-        </div>
-        <Link href="/dashboard/pricing">
-          <Button variant="outline">Upgrade plan</Button>
-        </Link>
-      </div>
+      <PageHeader
+        title="Billing"
+        description="Manage your subscription and view purchase history."
+        action={{
+          label:
+            data.subscription?.status === "ACTIVE" || data.subscription?.status === "TRIALING"
+              ? "Change plan"
+              : "Upgrade plan",
+          href: "/dashboard/pricing",
+        }}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
@@ -86,7 +103,7 @@ export default function BillingPage() {
           </CardHeader>
           <CardBody>
             <p className="text-xl font-bold text-ink-900">{data.currentPlan?.name ?? "Free"}</p>
-            {data.subscription && (
+            {data.subscription?.status === "ACTIVE" || data.subscription?.status === "TRIALING" ? (
               <div className="mt-3 space-y-2">
                 <Badge tone={statusTone(data.subscription.status)}>{data.subscription.status}</Badge>
                 {data.subscription.currentPeriodEnd && (
@@ -95,10 +112,21 @@ export default function BillingPage() {
                   </p>
                 )}
               </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                <Badge tone="neutral">Free plan</Badge>
+                <p className="text-sm text-slate-500">
+                  You can subscribe to Premium any time from Pricing.
+                </p>
+              </div>
             )}
-            <Button variant="ghost" className="mt-4" disabled title="Coming soon">
-              Manage subscription
-            </Button>
+            <Link href="/dashboard/pricing" className="mt-4 inline-block">
+              <Button variant="outline" size="sm">
+                {data.subscription?.status === "ACTIVE" || data.subscription?.status === "TRIALING"
+                  ? "Change plan"
+                  : "Upgrade plan"}
+              </Button>
+            </Link>
           </CardBody>
         </Card>
 
@@ -169,30 +197,38 @@ export default function BillingPage() {
         </CardHeader>
         <CardBody className="p-0">
           {data.payments.length === 0 ? (
-            <p className="px-5 py-8 text-center text-sm text-slate-500">No payments yet.</p>
+            <div className="px-5 py-6">
+              <EmptyState
+                compact
+                title="No payments yet"
+                description="Your payment history will appear here after your first purchase."
+                actionLabel="View pricing"
+                actionHref="/dashboard/pricing"
+              />
+            </div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50">
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Date</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Description</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Amount</th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
+            <Table>
+              <TableHead>
+                <TableHeader>Date</TableHeader>
+                <TableHeader>Description</TableHeader>
+                <TableHeader>Amount</TableHeader>
+                <TableHeader>Status</TableHeader>
+              </TableHead>
+              <TableBody>
                 {data.payments.map((p) => (
-                  <tr key={p.id}>
-                    <td className="px-5 py-3 text-slate-500">{new Date(p.createdAt).toLocaleDateString()}</td>
-                    <td className="px-5 py-3 font-medium text-slate-800">{p.description}</td>
-                    <td className="px-5 py-3 text-slate-600">{formatPrice(p.amountCents, p.currency)}</td>
-                    <td className="px-5 py-3">
+                  <TableRow key={p.id}>
+                    <TableCell className="text-slate-500">
+                      {new Date(p.createdAt).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="font-medium text-slate-800">{p.description}</TableCell>
+                    <TableCell>{formatPrice(p.amountCents, p.currency)}</TableCell>
+                    <TableCell>
                       <Badge tone={statusTone(p.status)}>{p.status}</Badge>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           )}
         </CardBody>
       </Card>

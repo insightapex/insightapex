@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Card, CardBody } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { PageLoading } from "@/components/ui/PageLoading";
+import { Alert } from "@/components/ui/Alert";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatPrice } from "@/lib/format-price";
 
@@ -35,20 +38,45 @@ interface Product {
 export default function PricingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [currentPlanId, setCurrentPlanId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
-    Promise.all([
-      fetch("/api/billing/plans").then((r) => r.json()),
-      fetch("/api/billing/products").then((r) => r.json()),
-    ])
-      .then(([plansData, productsData]) => {
-        setPlans(plansData);
-        setProducts(productsData);
+    function loadData() {
+      setLoadError(null);
+      return Promise.all([
+        fetch("/api/billing/plans", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/billing/products", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/billing/dashboard", { cache: "no-store" }).then((r) => r.json()),
+      ]).then(([plansData, productsData, dashboardData]) => {
+        if (plansData?.error) throw new Error(plansData.error);
+        if (productsData?.error) throw new Error(productsData.error);
+        if (dashboardData?.error) throw new Error(dashboardData.error);
+        setPlans(Array.isArray(plansData) ? plansData : []);
+        setProducts(Array.isArray(productsData) ? productsData : []);
+        setCurrentPlanId(dashboardData.currentPlan?.id ?? null);
+      });
+    }
+
+    loadData()
+      .catch((err) => {
+        setLoadError(err instanceof Error ? err.message : "Could not load pricing.");
       })
       .finally(() => setLoading(false));
+
+    function onVisible() {
+      if (document.visibilityState === "visible") {
+        loadData().catch((err) => {
+          setLoadError(err instanceof Error ? err.message : "Could not load pricing.");
+        });
+      }
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   async function checkoutSubscription(planId: string) {
@@ -92,36 +120,55 @@ export default function PricingPage() {
   const freePlan = plans.find((p) => p.accessType === "FREE");
   const paperProducts = products.filter((p) => p.type === "PAPER");
   const mockExamProducts = products.filter((p) => p.type === "MOCK_EXAM");
+  const onFreePlan =
+    !currentPlanId || Boolean(freePlan && currentPlanId === freePlan.id);
+
+  function isCurrentPlan(planId: string) {
+    if (freePlan && planId === freePlan.id) return onFreePlan;
+    return planId === currentPlanId;
+  }
+
+  function planCardClass(plan: Plan) {
+    if (isCurrentPlan(plan.id)) return "border-brand-500 ring-2 ring-brand-200";
+    if (plan.billingInterval === "YEARLY") return "border-brand-300 ring-2 ring-brand-100";
+    return "";
+  }
 
   if (loading) {
+    return <PageLoading message="Loading plans…" />;
+  }
+
+  if (loadError) {
     return (
-      <div className="flex h-64 items-center justify-center gap-2 text-sm text-slate-500">
-        <Spinner className="h-5 w-5 text-brand-600" />
-        Loading plans…
+      <div className="space-y-4">
+        <PageHeader title="Pricing" description="Choose a subscription or purchase individual papers and mock exams." />
+        <Alert tone="error" title="Unable to load pricing">
+          {loadError}
+        </Alert>
       </div>
     );
   }
 
   return (
     <div className="space-y-10">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-ink-900">Pricing</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Choose a subscription or purchase individual papers and mock exams.
-        </p>
-      </div>
+      <PageHeader
+        title="Pricing"
+        description="Choose a subscription or purchase individual papers and mock exams."
+      />
 
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-      )}
+      {error && <Alert tone="error">{error}</Alert>}
 
       <section>
         <h2 className="text-lg font-semibold text-ink-900">Subscription plans</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {freePlan && (
-            <Card className="border-slate-200">
+            <Card className={planCardClass(freePlan) || "border-slate-200"}>
               <CardBody>
-                <Badge tone="success">Free</Badge>
+                {isCurrentPlan(freePlan.id) ? (
+                  <Badge tone="success">Current plan</Badge>
+                ) : (
+                  <Badge tone="success">Free</Badge>
+                )}
                 <h3 className="mt-3 text-lg font-semibold text-ink-900">{freePlan.name}</h3>
                 <p className="mt-1 text-2xl font-bold text-ink-900">
                   {formatPrice(freePlan.priceCents, freePlan.currency)}
@@ -134,20 +181,23 @@ export default function PricingPage() {
                     </li>
                   ))}
                 </ul>
-                <Button variant="outline" className="mt-6 w-full" disabled>
-                  Current plan
-                </Button>
+                {isCurrentPlan(freePlan.id) && (
+                  <Button variant="outline" className="mt-6 w-full" disabled>
+                    Current plan
+                  </Button>
+                )}
               </CardBody>
             </Card>
           )}
 
           {subscriptionPlans.map((plan) => (
-            <Card
-              key={plan.id}
-              className={plan.billingInterval === "YEARLY" ? "border-brand-300 ring-2 ring-brand-100" : ""}
-            >
+            <Card key={plan.id} className={planCardClass(plan)}>
               <CardBody>
-                {plan.billingInterval === "YEARLY" && <Badge tone="brand">Best value</Badge>}
+                {isCurrentPlan(plan.id) ? (
+                  <Badge tone="success">Current plan</Badge>
+                ) : (
+                  plan.billingInterval === "YEARLY" && <Badge tone="brand">Best value</Badge>
+                )}
                 <h3 className="mt-3 text-lg font-semibold text-ink-900">{plan.name}</h3>
                 <p className="mt-1 text-2xl font-bold text-ink-900">
                   {formatPrice(plan.priceCents, plan.currency)}
@@ -163,15 +213,21 @@ export default function PricingPage() {
                     </li>
                   ))}
                 </ul>
-                <Button
-                  className="mt-6 w-full"
-                  disabled={!plan.hasStripePrice || checkoutLoading === plan.id}
-                  onClick={() => checkoutSubscription(plan.id)}
-                >
-                  {checkoutLoading === plan.id && <Spinner className="h-4 w-4" />}
-                  {plan.billingInterval === "YEARLY" ? "Subscribe Yearly" : "Subscribe Monthly"}
-                </Button>
-                {!plan.hasStripePrice && (
+                {isCurrentPlan(plan.id) ? (
+                  <Button variant="outline" className="mt-6 w-full" disabled>
+                    Current plan
+                  </Button>
+                ) : (
+                  <Button
+                    className="mt-6 w-full"
+                    disabled={!plan.hasStripePrice || checkoutLoading === plan.id}
+                    onClick={() => checkoutSubscription(plan.id)}
+                  >
+                    {checkoutLoading === plan.id && <Spinner className="h-4 w-4" />}
+                    {plan.billingInterval === "YEARLY" ? "Subscribe Yearly" : "Subscribe Monthly"}
+                  </Button>
+                )}
+                {!plan.hasStripePrice && !isCurrentPlan(plan.id) && (
                   <p className="mt-2 text-xs text-amber-600">Stripe Price ID has not been configured for this product.</p>
                 )}
               </CardBody>

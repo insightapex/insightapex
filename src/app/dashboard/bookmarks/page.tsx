@@ -1,15 +1,14 @@
 import { Card, CardBody } from "@/components/ui/Card";
-import { EmptyState } from "@/components/dashboard/EmptyState";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { PageHeader } from "@/components/ui/PageHeader";
 
 export default function BookmarksPage() {
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-ink-900">Bookmarks</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Save questions and topics to revisit later.
-        </p>
-      </div>
+      <PageHeader
+        title="Bookmarks"
+        description="Save questions and sub categories to revisit later."
+      />
 
       <Card>
         <CardBody>

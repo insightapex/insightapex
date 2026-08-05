@@ -1,22 +1,19 @@
 import { getCurrentUser } from "@/lib/guards";
-import { AdminSidebar } from "@/components/admin/AdminSidebar";
+import { AdminShell } from "@/components/admin/AdminShell";
+import { isContentAdmin, isOwner, isPlatformStaff } from "@/lib/roles";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
-  const isAdmin = user?.role === "ADMIN";
-
-  if (!isAdmin) {
+  if (!user || !isPlatformStaff(user.role)) {
     return <>{children}</>;
   }
 
-  const userName = user.name ?? user.email ?? "Admin";
+  const role = isOwner(user.role) ? "OWNER" : isContentAdmin(user.role) ? "CONTENT_ADMIN" : "OWNER";
+  const userName = user.name ?? user.email ?? (role === "OWNER" ? "Owner" : "Content Admin");
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#eef1f6]">
-      <AdminSidebar userName={userName} />
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">{children}</div>
-      </main>
-    </div>
+    <AdminShell userName={userName} role={role}>
+      {children}
+    </AdminShell>
   );
 }

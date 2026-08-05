@@ -1,0 +1,33 @@
+/** Shared admin/lecturer audit action keys. */
+export const ADMIN_AUDIT_ACTIONS = {
+  LECTURER_NOTIFY: "LECTURER_NOTIFY",
+  CATEGORY_CREATED: "CATEGORY_CREATED",
+  SUBCATEGORY_CREATED: "SUBCATEGORY_CREATED",
+  PAPER_CREATED: "PAPER_CREATED",
+  PAPER_UPDATED: "PAPER_UPDATED",
+  PAPER_DELETED: "PAPER_DELETED",
+  QUESTION_CREATED: "QUESTION_CREATED",
+  QUESTION_UPDATED: "QUESTION_UPDATED",
+  QUESTION_DELETED: "QUESTION_DELETED",
+  QUESTION_IMPORT_PREVIEW: "QUESTION_IMPORT_PREVIEW",
+  QUESTION_IMPORT_CONFIRM: "QUESTION_IMPORT_CONFIRM",
+  QUESTION_IMPORT_DELETED: "QUESTION_IMPORT_DELETED",
+} as const;
+
+export type AdminAuditAction =
+  (typeof ADMIN_AUDIT_ACTIONS)[keyof typeof ADMIN_AUDIT_ACTIONS];
+
+export const ADMIN_AUDIT_ACTION_LABELS: Record<string, string> = {
+  LECTURER_NOTIFY: "Lecturer notification",
+  CATEGORY_CREATED: "Category created",
+  SUBCATEGORY_CREATED: "Sub category created",
+  PAPER_CREATED: "Paper created",
+  PAPER_UPDATED: "Paper updated",
+  PAPER_DELETED: "Paper deleted",
+  QUESTION_CREATED: "Question created",
+  QUESTION_UPDATED: "Question updated",
+  QUESTION_DELETED: "Question deleted",
+  QUESTION_IMPORT_PREVIEW: "Question import preview",
+  QUESTION_IMPORT_CONFIRM: "Question import confirmed",
+  QUESTION_IMPORT_DELETED: "Question import deleted",
+};

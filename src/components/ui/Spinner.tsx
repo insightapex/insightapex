@@ -1,13 +1,23 @@
 import { cn } from "@/lib/utils";
 
-export function Spinner({ className }: { className?: string }) {
+interface SpinnerProps {
+  className?: string;
+  size?: "sm" | "md" | "lg";
+}
+
+const sizes: Record<string, string> = {
+  sm: "h-4 w-4",
+  md: "h-6 w-6",
+  lg: "h-8 w-8",
+};
+
+export function Spinner({ className, size = "md" }: SpinnerProps) {
   return (
     <svg
-      className={cn("animate-spin", className)}
-      xmlns="http://www.w3.org/2000/svg"
+      className={cn("animate-spin text-brand-600", sizes[size], className)}
       fill="none"
       viewBox="0 0 24 24"
-      aria-hidden="true"
+      aria-label="Loading"
     >
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path

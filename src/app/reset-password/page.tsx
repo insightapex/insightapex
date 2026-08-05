@@ -6,6 +6,8 @@ import { AuthLayout } from "@/components/marketing/AuthLayout";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
+import { Alert } from "@/components/ui/Alert";
+import Link from "next/link";
 
 function ResetPasswordForm() {
   const router = useRouter();
@@ -35,10 +37,33 @@ function ResetPasswordForm() {
     setTimeout(() => router.push("/login"), 2000);
   }
 
+  if (!token) {
+    return (
+      <AuthLayout title="Invalid reset link" subtitle="This password reset link is missing or invalid.">
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            Request a new reset link from the forgot password page.
+          </p>
+          <Link href="/forgot-password">
+            <Button className="w-full">Request new link</Button>
+          </Link>
+          <Link href="/login">
+            <Button variant="outline" className="w-full">
+              Back to login
+            </Button>
+          </Link>
+        </div>
+      </AuthLayout>
+    );
+  }
+
   if (success) {
     return (
-      <AuthLayout title="Password updated" subtitle="Redirecting you to login...">
-        <p />
+      <AuthLayout title="Password updated" subtitle="Your password has been changed successfully.">
+        <p className="text-sm text-slate-600">Redirecting you to login…</p>
+        <Link href="/login" className="mt-4 block">
+          <Button className="w-full">Go to login now</Button>
+        </Link>
       </AuthLayout>
     );
   }
@@ -53,8 +78,9 @@ function ResetPasswordForm() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <Alert tone="error">{error}</Alert>}
         <Button type="submit" className="w-full" disabled={loading || !token}>
+          {loading && <Spinner className="h-4 w-4" />}
           {loading ? "Updating..." : "Update password"}
         </Button>
       </form>

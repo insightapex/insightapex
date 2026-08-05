@@ -76,7 +76,7 @@ export default function AdminMockExamsPage() {
   useEffect(() => {
     fetch("/api/admin/papers")
       .then((r) => r.json())
-      .then(setPapers);
+      .then((d) => setPapers(Array.isArray(d) ? d : []));
   }, []);
 
   const loadMockExams = useCallback(() => {

@@ -1,11 +1,11 @@
 import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import {
-  grantPurchaseAccess,
   grantSubscriptionAccess,
   revokeSubscriptionAccess,
   updateSubscriptionAccessEnd,
 } from "@/services/access-control";
+import { fulfillCheckoutSession } from "./fulfill-checkout";
 import { logWebhookDev } from "./webhook-logger";
 
 function getSubscriptionPeriodEnd(subscription: Stripe.Subscription): Date | null {
@@ -20,13 +20,22 @@ function getSubscriptionPeriodEnd(subscription: Stripe.Subscription): Date | nul
 }
 
 function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
-  const sub = invoice.parent?.subscription_details?.subscription;
-  if (!sub) return null;
-  return typeof sub === "string" ? sub : sub.id;
+  const fromParent = invoice.parent?.subscription_details?.subscription;
+  if (fromParent) {
+    return typeof fromParent === "string" ? fromParent : fromParent.id;
+  }
+
+  const legacy = (invoice as Stripe.Invoice & { subscription?: string | Stripe.Subscription })
+    .subscription;
+  if (legacy) {
+    return typeof legacy === "string" ? legacy : legacy.id;
+  }
+
+  return null;
 }
 
 export async function handleStripeWebhook(event: Stripe.Event): Promise<void> {
-  logWebhookDev(`Dispatching handler for ${event.type}`);
+  logWebhookDev(`Dispatching handler for ${event.type}`, { eventId: event.id });
 
   switch (event.type) {
     case "checkout.session.completed":
@@ -56,169 +65,16 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     sessionId: session.id,
     mode: session.mode,
     metadata: session.metadata,
+    userId: session.metadata?.userId,
     customer: session.customer,
     paymentStatus: session.payment_status,
   });
 
-  const userId = session.metadata?.userId;
-  const type = session.metadata?.type;
-  if (!userId || !type) {
-    logWebhookDev("Skipped checkout.session.completed: missing userId or type in metadata", {
-      metadata: session.metadata,
-    });
-    return;
+  const result = await fulfillCheckoutSession(session);
+
+  if (result.status === "skipped") {
+    logWebhookDev("checkout.session.completed not fulfilled", { reason: result.reason });
   }
-
-  if (type === "subscription") {
-    const planId = session.metadata?.planId;
-    if (!planId) {
-      logWebhookDev("Skipped subscription checkout: missing planId in metadata");
-      return;
-    }
-
-    const plan = await prisma.plan.findUnique({ where: { id: planId } });
-    if (!plan) {
-      logWebhookDev("Skipped subscription checkout: plan not found", { planId });
-      return;
-    }
-
-    const stripeSubId =
-      typeof session.subscription === "string"
-        ? session.subscription
-        : session.subscription?.id;
-
-    const existing = stripeSubId
-      ? await prisma.subscription.findFirst({ where: { stripeSubscriptionId: stripeSubId } })
-      : null;
-
-    if (!existing) {
-      const subscription = await prisma.subscription.create({
-        data: {
-          userId,
-          planId: plan.id,
-          status: "ACTIVE",
-          accessType: plan.accessType as "MONTHLY_SUBSCRIPTION" | "YEARLY_SUBSCRIPTION",
-          priceCents: plan.priceCents,
-          currency: plan.currency,
-          provider: "stripe",
-          stripeCustomerId: typeof session.customer === "string" ? session.customer : session.customer?.id,
-          stripeSubscriptionId: stripeSubId,
-          startsAt: new Date(),
-        },
-      });
-
-      await grantSubscriptionAccess(
-        userId,
-        subscription.id,
-        plan.accessType as "MONTHLY_SUBSCRIPTION" | "YEARLY_SUBSCRIPTION"
-      );
-
-      logWebhookDev("Subscription created and access granted", {
-        subscriptionId: subscription.id,
-        userId,
-        planId: plan.id,
-        stripeSubscriptionId: stripeSubId,
-      });
-
-      if (session.amount_total) {
-        const payment = await prisma.payment.create({
-          data: {
-            userId,
-            subscriptionId: subscription.id,
-            amountCents: session.amount_total,
-            currency: (session.currency ?? "gbp").toUpperCase(),
-            status: "COMPLETED",
-            provider: "stripe",
-            providerPaymentId:
-              typeof session.payment_intent === "string"
-                ? session.payment_intent
-                : session.payment_intent?.id,
-          },
-        });
-        logWebhookDev("Subscription payment recorded", { paymentId: payment.id });
-      }
-    } else {
-      logWebhookDev("Subscription already exists, skipping create", {
-        stripeSubscriptionId: stripeSubId,
-        subscriptionId: existing.id,
-      });
-    }
-    return;
-  }
-
-  const productId = session.metadata?.productId;
-  if (!productId) {
-    logWebhookDev("Skipped product checkout: missing productId in metadata");
-    return;
-  }
-
-  const product = await prisma.product.findUnique({ where: { id: productId } });
-  if (!product) {
-    logWebhookDev("Skipped product checkout: product not found", { productId });
-    return;
-  }
-
-  const paymentIntentId =
-    typeof session.payment_intent === "string"
-      ? session.payment_intent
-      : session.payment_intent?.id;
-
-  const existingPurchase = paymentIntentId
-    ? await prisma.purchase.findFirst({ where: { stripePaymentId: paymentIntentId } })
-    : null;
-
-  if (existingPurchase) {
-    logWebhookDev("Purchase already exists, skipping create", {
-      purchaseId: existingPurchase.id,
-      stripePaymentId: paymentIntentId,
-    });
-    return;
-  }
-
-  const purchase = await prisma.purchase.create({
-    data: {
-      userId,
-      productId: product.id,
-      type: product.type === "PAPER" ? "ONE_TIME_PAPER" : "ONE_TIME_MOCK_EXAM",
-      accessType: product.accessType,
-      paperId: product.paperId,
-      mockExamId: product.mockExamId,
-      status: "COMPLETED",
-      amountCents: session.amount_total ?? product.priceCents ?? 0,
-      currency: (session.currency ?? "gbp").toUpperCase(),
-      provider: "stripe",
-      stripePaymentId: paymentIntentId,
-      startsAt: new Date(),
-    },
-  });
-
-  await grantPurchaseAccess(
-    userId,
-    purchase.id,
-    product.accessType as "ONE_TIME_PAPER" | "ONE_TIME_MOCK_EXAM",
-    product.paperId,
-    product.mockExamId
-  );
-
-  const payment = await prisma.payment.create({
-    data: {
-      userId,
-      purchaseId: purchase.id,
-      amountCents: purchase.amountCents ?? 0,
-      currency: purchase.currency ?? "GBP",
-      status: "COMPLETED",
-      provider: "stripe",
-      providerPaymentId: paymentIntentId,
-    },
-  });
-
-  logWebhookDev("Purchase created and access granted", {
-    purchaseId: purchase.id,
-    paymentId: payment.id,
-    userId,
-    productId: product.id,
-    purchaseType: session.metadata?.purchaseType,
-  });
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
@@ -226,6 +82,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     subscriptionId: subscription.id,
     status: subscription.status,
     metadata: subscription.metadata,
+    userId: subscription.metadata?.userId,
   });
 
   const userId = subscription.metadata?.userId;
@@ -262,13 +119,19 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       },
     });
     if (status === "ACTIVE" || status === "TRIALING") {
-      await grantSubscriptionAccess(userId, dbSub.id, "MONTHLY_SUBSCRIPTION", periodEnd);
+      const userAccess = await grantSubscriptionAccess(
+        userId,
+        dbSub.id,
+        "MONTHLY_SUBSCRIPTION",
+        periodEnd
+      );
+      logWebhookDev("Subscription created from subscription event", {
+        subscriptionId: dbSub.id,
+        userAccessId: userAccess.id,
+        userId,
+        planId,
+      });
     }
-    logWebhookDev("Subscription created from subscription event", {
-      subscriptionId: dbSub.id,
-      userId,
-      planId,
-    });
     return;
   }
 
@@ -349,7 +212,7 @@ async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
     where: { providerPaymentId: invoice.id },
   });
   if (!existing && invoice.amount_paid) {
-    await prisma.payment.create({
+    const payment = await prisma.payment.create({
       data: {
         userId: dbSub.userId,
         subscriptionId: dbSub.id,
@@ -360,7 +223,10 @@ async function handleInvoicePaymentSucceeded(invoice: Stripe.Invoice) {
         providerPaymentId: invoice.id,
       },
     });
-    logWebhookDev("Renewal payment recorded", { paymentId: invoice.id, subscriptionId: dbSub.id });
+    logWebhookDev("Renewal payment recorded", {
+      paymentId: payment.id,
+      subscriptionId: dbSub.id,
+    });
   }
 }
 

@@ -3,13 +3,15 @@ import { requireAuthApi } from "@/lib/admin-auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { MAX_PRACTICE_QUESTIONS } from "@/lib/practice";
-import { hasPaperAccess } from "@/services/access-control";
+import { hasGlobalPremiumAccess, hasPremiumQuestionAccess, questionAccessWhere } from "@/services/access-control";
+import { getPlatformSettings } from "@/services/platform-settings";
 
 const startSchema = z.object({
   paperId: z.string(),
-  topicId: z.string().optional(),
+  subCategoryId: z.string().min(1, "Sub Category is required"),
   limit: z.number().int().min(1).max(MAX_PRACTICE_QUESTIONS),
-  durationSeconds: z.number().int().min(0).max(40 * 60).default(0),
+  /** When omitted, platform defaultTimerMinutes applies. Explicit 0 = untimed. */
+  durationSeconds: z.number().int().min(0).max(40 * 60).optional(),
   reviewMode: z.enum(["after_each", "at_end"]).default("at_end"),
 });
 
@@ -24,74 +26,124 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message }, { status: 400 });
   }
 
-  const { paperId, topicId, limit, durationSeconds, reviewMode } = parsed.data;
+  const { paperId, subCategoryId, limit, durationSeconds, reviewMode } = parsed.data;
+  const settings = await getPlatformSettings();
 
-  const hasAccess = await hasPaperAccess(userId, paperId);
-  if (!hasAccess) {
-    return NextResponse.json(
-      { error: "Upgrade required to practice this paper.", code: "ACCESS_DENIED", upgradeUrl: "/dashboard/pricing" },
-      { status: 403 }
-    );
+  const subCategory = await prisma.subCategory.findFirst({
+    where: {
+      id: subCategoryId,
+      isActive: true,
+      category: { paperId, isActive: true },
+    },
+    include: { category: { select: { title: true } } },
+  });
+
+  if (!subCategory) {
+    return NextResponse.json({ error: "Sub Category not found for this paper." }, { status: 404 });
   }
+
+  const hasPremium =
+    (await hasGlobalPremiumAccess(userId)) ||
+    (await hasPremiumQuestionAccess(userId, paperId));
+  const accessFilter = questionAccessWhere(hasPremium);
 
   const maxQuestions = Math.min(limit, MAX_PRACTICE_QUESTIONS);
 
   const questions = await prisma.question.findMany({
     where: {
       isActive: true,
-      topic: {
-        paperId,
-        ...(topicId ? { id: topicId } : {}),
-        isActive: true,
-      },
+      subCategoryId,
+      ...accessFilter,
     },
     include: {
       options: { orderBy: { order: "asc" }, select: { id: true, text: true, order: true, isCorrect: true } },
-      topic: { select: { id: true, title: true } },
+      subCategory: {
+        select: {
+          title: true,
+          category: { select: { title: true } },
+        },
+      },
     },
     take: Math.max(maxQuestions * 3, maxQuestions),
   });
 
   if (questions.length === 0) {
-    return NextResponse.json({ error: "No questions available for this selection." }, { status: 404 });
+    return NextResponse.json(
+      {
+        error: hasPremium
+          ? "No questions available for this selection."
+          : "No free trial questions available. Upgrade to access premium questions.",
+        code: hasPremium ? "NO_QUESTIONS" : "ACCESS_DENIED",
+        upgradeUrl: "/dashboard/pricing",
+      },
+      { status: 404 }
+    );
   }
 
-  const shuffled = questions.sort(() => Math.random() - 0.5).slice(0, Math.min(maxQuestions, questions.length));
+  const ordered = settings.randomiseQuestions
+    ? [...questions].sort(() => Math.random() - 0.5)
+    : [...questions].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const selected = ordered.slice(0, Math.min(maxQuestions, ordered.length));
 
   const attempt = await prisma.quizAttempt.create({
     data: {
       userId,
       paperId,
       status: "IN_PROGRESS",
-      totalQuestions: shuffled.length,
+      totalQuestions: selected.length,
       responses: {
-        create: shuffled.map((q: typeof shuffled[0]) => ({
+        create: selected.map((q) => ({
           questionId: q.id,
         })),
       },
     },
   });
 
+  const resolvedDuration =
+    durationSeconds !== undefined
+      ? durationSeconds
+      : settings.defaultTimerMinutes > 0
+        ? settings.defaultTimerMinutes * 60
+        : 0;
+
   return NextResponse.json({
     attemptId: attempt.id,
-    questions: shuffled.map((q: typeof shuffled[0]) => {
-      const correctOption = q.options.find((o) => o.isCorrect);
+    questions: selected.map((q) => {
+      const options = [...q.options].sort((a, b) => a.order - b.order);
+      const correctOptions = options.filter((o) => o.isCorrect);
       return {
         id: q.id,
         text: q.text,
+        questionType:
+          correctOptions.length > 1 && q.questionType === "SINGLE_CHOICE"
+            ? "MULTIPLE_CHOICE"
+            : q.questionType,
         imageUrl: q.imageUrl,
         marks: q.marks,
-        topicTitle: q.topic.title,
-        options: q.options.map((o) => ({ id: o.id, text: o.text })),
-        ...(reviewMode === "after_each"
-          ? {
-              explanation: q.explanation,
-              correctOptionId: correctOption?.id ?? null,
-            }
-          : {}),
+        categoryTitle: q.subCategory?.category.title ?? subCategory.category.title,
+        subCategoryTitle: q.subCategory?.title ?? subCategory.title,
+        // Always Excel order (A→D by stored order) — do not randomise answers
+        options: options.map((o) => ({
+          id: o.id,
+          text: o.text,
+          order: o.order,
+          label: (["A", "B", "C", "D"] as const)[o.order] ?? String(o.order + 1),
+        })),
+        explanation: q.explanation,
+        explanationMy: q.explanationMy,
+        correctOptionId: correctOptions[0]?.id ?? null,
+        correctOptionIds: correctOptions.map((o) => o.id),
       };
     }),
-    durationSeconds,
+    durationSeconds: resolvedDuration,
     reviewMode,
+    quizSettings: {
+      allowPreviousQuestion: settings.allowPreviousQuestion,
+      allowQuestionFlagging: settings.allowQuestionFlagging,
+      allowDifficultyRating: settings.allowDifficultyRating,
+      allowAnswerReview: settings.allowAnswerReview,
+      showExplanationAfterCheck: settings.showExplanationAfterCheck,
+      allowBookmarks: settings.allowBookmarks,
+    },
   });
 }

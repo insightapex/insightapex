@@ -34,8 +34,12 @@ export function ScoreChart({ data }: { data: DataPoint[] }) {
       <AreaChart data={formatted} margin={{ top: 8, right: 16, left: -16, bottom: 0 }}>
         <defs>
           <linearGradient id="scoreGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#2456f5" stopOpacity={0.15} />
+            <stop offset="0%" stopColor="#8b2ff5" stopOpacity={0.18} />
             <stop offset="100%" stopColor="#2456f5" stopOpacity={0} />
+          </linearGradient>
+          <linearGradient id="scoreStroke" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#8b2ff5" />
+            <stop offset="100%" stopColor="#2456f5" />
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
@@ -73,7 +77,7 @@ export function ScoreChart({ data }: { data: DataPoint[] }) {
         <Area
           type="monotone"
           dataKey="score"
-          stroke="#2456f5"
+          stroke="url(#scoreStroke)"
           strokeWidth={2.5}
           fill="url(#scoreGradient)"
           dot={{ r: 4, fill: "#2456f5", strokeWidth: 2, stroke: "#fff" }}
