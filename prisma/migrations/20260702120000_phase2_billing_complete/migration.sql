@@ -1,5 +1,10 @@
 -- Phase 2: complete billing tables and schema updates
 
+-- Ensure SubscriptionStatus exists (created in init_phase1; fallback for partial DBs)
+DO $$ BEGIN
+  CREATE TYPE "SubscriptionStatus" AS ENUM ('ACTIVE', 'CANCELED', 'PAST_DUE', 'TRIALING');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- User Stripe customer ID
 ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT;
 CREATE INDEX IF NOT EXISTS "User_stripeCustomerId_idx" ON "User"("stripeCustomerId");

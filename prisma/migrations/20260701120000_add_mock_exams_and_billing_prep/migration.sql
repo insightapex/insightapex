@@ -9,7 +9,8 @@ CREATE TYPE "PaymentStatus" AS ENUM ('PENDING', 'COMPLETED', 'FAILED', 'REFUNDED
 CREATE TYPE "ProductType" AS ENUM ('SUBSCRIPTION_PLAN', 'PAPER', 'MOCK_EXAM', 'QUESTION_PACK');
 CREATE TYPE "UserAccessStatus" AS ENUM ('ACTIVE', 'EXPIRED', 'REVOKED');
 
--- Extend PurchaseType
+-- PurchaseType is created in 20260630120000_init_phase1 as PAPER_PACK | QUESTION_PACK | SUBSCRIPTION.
+-- Extend with billing/mock values. Use plain ADD VALUE (not inside DO $$) so Postgres accepts it in Prisma transactions (PG 12+).
 ALTER TYPE "PurchaseType" ADD VALUE IF NOT EXISTS 'MOCK_EXAM';
 ALTER TYPE "PurchaseType" ADD VALUE IF NOT EXISTS 'ONE_TIME_PAPER';
 ALTER TYPE "PurchaseType" ADD VALUE IF NOT EXISTS 'ONE_TIME_MOCK_EXAM';
@@ -120,10 +121,29 @@ CREATE TABLE IF NOT EXISTS "UserAccess" (
     CONSTRAINT "UserAccess_pkey" PRIMARY KEY ("id")
 );
 
--- Indexes and foreign keys (idempotent where possible)
 CREATE UNIQUE INDEX IF NOT EXISTS "Plan_slug_key" ON "Plan"("slug");
 CREATE UNIQUE INDEX IF NOT EXISTS "Product_slug_key" ON "Product"("slug");
 CREATE UNIQUE INDEX IF NOT EXISTS "MockExamQuestion_mockExamId_questionId_key" ON "MockExamQuestion"("mockExamId", "questionId");
 CREATE INDEX IF NOT EXISTS "MockExam_paperId_idx" ON "MockExam"("paperId");
 CREATE INDEX IF NOT EXISTS "MockExam_status_isActive_idx" ON "MockExam"("status", "isActive");
 CREATE INDEX IF NOT EXISTS "QuizAttempt_mockExamId_idx" ON "QuizAttempt"("mockExamId");
+
+DO $$ BEGIN
+  ALTER TABLE "MockExam" ADD CONSTRAINT "MockExam_paperId_fkey"
+    FOREIGN KEY ("paperId") REFERENCES "Paper"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE "MockExamQuestion" ADD CONSTRAINT "MockExamQuestion_mockExamId_fkey"
+    FOREIGN KEY ("mockExamId") REFERENCES "MockExam"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE "MockExamQuestion" ADD CONSTRAINT "MockExamQuestion_questionId_fkey"
+    FOREIGN KEY ("questionId") REFERENCES "Question"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE "QuizAttempt" ADD CONSTRAINT "QuizAttempt_mockExamId_fkey"
+    FOREIGN KEY ("mockExamId") REFERENCES "MockExam"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
