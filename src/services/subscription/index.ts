@@ -1,13 +1,19 @@
 /**
  * Subscription lifecycle — active status checks for premium access.
+ *
+ * Scheduled cancellation (cancelAtPeriodEnd=true) keeps status ACTIVE/TRIALING
+ * until Stripe ends the period, so premium continues until currentPeriodEnd.
  */
 
 import { prisma } from "@/lib/prisma";
 
 /**
- * A subscription counts as active when status is ACTIVE/TRIALING and it has not
- * been explicitly ended. We intentionally do NOT deny access based on
- * currentPeriodEnd alone — Stripe may still show ACTIVE while renewing.
+ * Premium subscription access when:
+ * - status is ACTIVE or TRIALING, and
+ * - not explicitly ended (endsAt in the past), and
+ * - if currentPeriodEnd is set, it has not passed yet.
+ *
+ * cancelAtPeriodEnd does not end access early (status remains ACTIVE until deleted).
  */
 export async function hasActiveSubscription(userId: string): Promise<boolean> {
   const now = new Date();
@@ -15,7 +21,17 @@ export async function hasActiveSubscription(userId: string): Promise<boolean> {
     where: {
       userId,
       status: { in: ["ACTIVE", "TRIALING"] },
-      OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      AND: [
+        { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+        {
+          OR: [
+            { currentPeriodEnd: null },
+            { currentPeriodEnd: { gt: now } },
+            // During the paid period after scheduling cancel, period end is still future.
+            // If clocks skew slightly past end before deleted webhook, deny.
+          ],
+        },
+      ],
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -28,7 +44,12 @@ export async function getActiveSubscription(userId: string) {
     where: {
       userId,
       status: { in: ["ACTIVE", "TRIALING"] },
-      OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      AND: [
+        { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+        {
+          OR: [{ currentPeriodEnd: null }, { currentPeriodEnd: { gt: now } }],
+        },
+      ],
     },
     orderBy: { updatedAt: "desc" },
     include: { plan: true },

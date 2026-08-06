@@ -36,7 +36,7 @@ async function hasCompletedPurchase(
   return Boolean(purchase);
 }
 
-/** Active subscription grant in UserAccess (global, not paper-scoped). */
+/** Active subscription grant in UserAccess — only if the Subscription row still qualifies. */
 async function hasActiveSubscriptionUserAccess(userId: string): Promise<boolean> {
   const now = new Date();
   const access = await prisma.userAccess.findFirst({
@@ -47,6 +47,13 @@ async function hasActiveSubscriptionUserAccess(userId: string): Promise<boolean>
       paperId: null,
       mockExamId: null,
       OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+      subscription: {
+        status: { in: ["ACTIVE", "TRIALING"] },
+        AND: [
+          { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
+          { OR: [{ currentPeriodEnd: null }, { currentPeriodEnd: { gt: now } }] },
+        ],
+      },
     },
   });
   return Boolean(access);

@@ -234,6 +234,8 @@ async function fulfillSubscriptionCheckout(
       stripeCustomerId:
         typeof session.customer === "string" ? session.customer : session.customer?.id,
       stripeSubscriptionId: stripeSubId,
+      cancelAtPeriodEnd: false,
+      cancelledAt: null,
       startsAt: new Date(),
     },
   });

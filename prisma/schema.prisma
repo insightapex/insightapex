@@ -588,7 +588,13 @@ model Subscription {
   providerSubscriptionId String?
   stripeCustomerId       String?
   stripeSubscriptionId   String?
+  /// Stripe billing period start (unix period → DateTime).
+  currentPeriodStart     DateTime?
   currentPeriodEnd       DateTime?
+  /// Stripe cancel_at_period_end — access continues until currentPeriodEnd.
+  cancelAtPeriodEnd      Boolean            @default(false)
+  /// When the user or Stripe scheduled cancellation (cancel_at_period_end = true).
+  cancelledAt            DateTime?
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -598,6 +604,7 @@ model Subscription {
   @@index([userId])
   @@index([stripeSubscriptionId])
   @@index([stripeCustomerId])
+  @@index([userId, status])
 }
 
 model Purchase {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -8,17 +8,27 @@ import { Badge } from "@/components/ui/Badge";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { PageLoading } from "@/components/ui/PageLoading";
 import { Alert } from "@/components/ui/Alert";
+import { Modal } from "@/components/ui/Modal";
+import { Spinner } from "@/components/ui/Spinner";
 import { Table, TableHead, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/Table";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatPrice } from "@/lib/format-price";
 
+interface BillingSubscription {
+  id: string;
+  status: string;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  endsAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  cancelledAt: string | null;
+  canCancel: boolean;
+  canResume: boolean;
+}
+
 interface BillingData {
   currentPlan: { name: string; billingInterval: string } | null;
-  subscription: {
-    status: string;
-    currentPeriodEnd: string | null;
-    endsAt: string | null;
-  } | null;
+  subscription: BillingSubscription | null;
   purchasedPapers: Array<{
     id: string;
     paper: { code: string; title: string } | null;
@@ -43,23 +53,80 @@ interface BillingData {
   }>;
 }
 
+function formatDate(value: string | null | undefined) {
+  if (!value) return null;
+  return new Date(value).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export default function BillingPage() {
   const [data, setData] = useState<BillingData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [resuming, setResuming] = useState(false);
+
+  const loadBilling = useCallback(async () => {
+    const res = await fetch("/api/billing/dashboard", { cache: "no-store" });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error ?? "Could not load billing data.");
+    setData(json);
+    return json as BillingData;
+  }, []);
 
   useEffect(() => {
-    fetch("/api/billing/dashboard", { cache: "no-store" })
-      .then(async (res) => {
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error ?? "Could not load billing data.");
-        setData(json);
-      })
+    loadBilling()
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Could not load billing data.");
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadBilling]);
+
+  async function confirmCancel() {
+    if (cancelling) return;
+    setCancelling(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const res = await fetch("/api/billing/subscription/cancel", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Could not cancel subscription.");
+      await loadBilling();
+      setCancelModalOpen(false);
+      setActionSuccess(
+        json.message ??
+          "Your subscription will cancel at the end of the billing period. You keep premium until then."
+      );
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not cancel subscription.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function resumeSubscription() {
+    if (resuming) return;
+    setResuming(true);
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const res = await fetch("/api/billing/subscription/resume", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Could not resume subscription.");
+      await loadBilling();
+      setActionSuccess(json.message ?? "Your subscription will renew as usual.");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not resume subscription.");
+    } finally {
+      setResuming(false);
+    }
+  }
 
   if (loading) {
     return <PageLoading message="Loading billing…" />;
@@ -77,10 +144,15 @@ export default function BillingPage() {
   }
 
   const statusTone = (status: string) => {
-    if (status === "ACTIVE" || status === "COMPLETED") return "success" as const;
+    if (status === "ACTIVE" || status === "COMPLETED" || status === "TRIALING") return "success" as const;
     if (status === "PAST_DUE" || status === "FAILED") return "danger" as const;
     return "neutral" as const;
   };
+
+  const sub = data.subscription;
+  const isPremium = sub && (sub.status === "ACTIVE" || sub.status === "TRIALING");
+  const cancelDate = formatDate(sub?.currentPeriodEnd ?? sub?.endsAt);
+  const renewDate = formatDate(sub?.currentPeriodEnd);
 
   return (
     <div className="space-y-6">
@@ -88,13 +160,21 @@ export default function BillingPage() {
         title="Billing"
         description="Manage your subscription and view purchase history."
         action={{
-          label:
-            data.subscription?.status === "ACTIVE" || data.subscription?.status === "TRIALING"
-              ? "Change plan"
-              : "Upgrade plan",
+          label: isPremium ? "Change plan" : "Upgrade plan",
           href: "/dashboard/pricing",
         }}
       />
+
+      {actionSuccess && (
+        <Alert tone="success" title="Subscription updated">
+          {actionSuccess}
+        </Alert>
+      )}
+      {actionError && (
+        <Alert tone="error" title="Action failed">
+          {actionError}
+        </Alert>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
@@ -103,13 +183,57 @@ export default function BillingPage() {
           </CardHeader>
           <CardBody>
             <p className="text-xl font-bold text-ink-900">{data.currentPlan?.name ?? "Free"}</p>
-            {data.subscription?.status === "ACTIVE" || data.subscription?.status === "TRIALING" ? (
+            {isPremium && sub ? (
               <div className="mt-3 space-y-2">
-                <Badge tone={statusTone(data.subscription.status)}>{data.subscription.status}</Badge>
-                {data.subscription.currentPeriodEnd && (
-                  <p className="text-sm text-slate-500">
-                    Renews {new Date(data.subscription.currentPeriodEnd).toLocaleDateString()}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={statusTone(sub.status)}>{sub.status}</Badge>
+                  {sub.cancelAtPeriodEnd && (
+                    <Badge tone="warning">Scheduled to cancel</Badge>
+                  )}
+                </div>
+                {sub.cancelAtPeriodEnd ? (
+                  <p className="text-sm text-slate-600">
+                    Cancels on{" "}
+                    <span className="font-medium text-ink-900">{cancelDate ?? "period end"}</span>
+                    . You keep premium access until that date.
                   </p>
+                ) : (
+                  renewDate && (
+                    <p className="text-sm text-slate-500">
+                      Renews {renewDate}
+                    </p>
+                  )
+                )}
+
+                {sub.canCancel && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => {
+                      setActionError(null);
+                      setCancelModalOpen(true);
+                    }}
+                  >
+                    Cancel subscription
+                  </Button>
+                )}
+
+                {sub.canResume && (
+                  <div className="mt-2 space-y-2">
+                    <p className="text-xs text-slate-500">
+                      Changed your mind? You can keep premium and renew as usual.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={resuming}
+                      onClick={() => resumeSubscription()}
+                    >
+                      {resuming && <Spinner className="h-4 w-4" />}
+                      Keep subscription
+                    </Button>
+                  </div>
                 )}
               </div>
             ) : (
@@ -122,9 +246,7 @@ export default function BillingPage() {
             )}
             <Link href="/dashboard/pricing" className="mt-4 inline-block">
               <Button variant="outline" size="sm">
-                {data.subscription?.status === "ACTIVE" || data.subscription?.status === "TRIALING"
-                  ? "Change plan"
-                  : "Upgrade plan"}
+                {isPremium ? "Change plan" : "Upgrade plan"}
               </Button>
             </Link>
           </CardBody>
@@ -232,6 +354,41 @@ export default function BillingPage() {
           )}
         </CardBody>
       </Card>
+
+      <Modal
+        open={cancelModalOpen}
+        onClose={() => {
+          if (!cancelling) setCancelModalOpen(false);
+        }}
+        title="Cancel subscription?"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600">
+            Your premium access will continue until{" "}
+            <span className="font-medium text-ink-900">{cancelDate ?? "the end of your billing period"}</span>
+            . You will not be charged again after that date. One-time paper and mock exam purchases
+            are never removed.
+          </p>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="outline"
+              disabled={cancelling}
+              onClick={() => setCancelModalOpen(false)}
+            >
+              Keep subscription
+            </Button>
+            <Button
+              disabled={cancelling}
+              onClick={() => confirmCancel()}
+              className="bg-red-600 hover:bg-red-700 focus-visible:ring-red-500"
+            >
+              {cancelling && <Spinner className="h-4 w-4" />}
+              Cancel subscription
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

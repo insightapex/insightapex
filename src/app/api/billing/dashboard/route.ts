@@ -31,7 +31,6 @@ export async function GET() {
 
   const freePlan = await prisma.plan.findFirst({ where: { accessType: "FREE" } });
 
-  // Unique owned product / paper / mock IDs so pricing UI can hide "Buy" after purchase.
   const ownedProductIds = [
     ...new Set(purchases.map((p) => p.productId).filter((id): id is string => Boolean(id))),
   ];
@@ -42,6 +41,16 @@ export async function GET() {
     ...new Set(purchases.map((p) => p.mockExamId).filter((id): id is string => Boolean(id))),
   ];
 
+  const isPremiumStatus =
+    subscription &&
+    (subscription.status === "ACTIVE" || subscription.status === "TRIALING");
+  const canCancel = Boolean(
+    isPremiumStatus && subscription.stripeSubscriptionId && !subscription.cancelAtPeriodEnd
+  );
+  const canResume = Boolean(
+    isPremiumStatus && subscription.stripeSubscriptionId && subscription.cancelAtPeriodEnd
+  );
+
   return NextResponse.json({
     currentPlan: subscription?.plan ?? freePlan ?? null,
     subscription: subscription
@@ -49,8 +58,13 @@ export async function GET() {
           id: subscription.id,
           status: subscription.status,
           accessType: subscription.accessType,
+          currentPeriodStart: subscription.currentPeriodStart,
           currentPeriodEnd: subscription.currentPeriodEnd,
           endsAt: subscription.endsAt,
+          cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+          cancelledAt: subscription.cancelledAt,
+          canCancel,
+          canResume,
         }
       : null,
     ownedProductIds,
