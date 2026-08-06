@@ -64,6 +64,7 @@ export async function createSubscriptionCheckout(
     stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
+      client_reference_id: userId,
       line_items: [{ price: plan.providerPriceId!, quantity: 1 }],
       success_url: `${appUrl}/dashboard/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/dashboard/billing/cancelled`,
@@ -109,6 +110,7 @@ export async function createProductCheckout(
     stripe.checkout.sessions.create({
       mode: "payment",
       customer: customerId,
+      client_reference_id: userId,
       line_items: [{ price: product.providerPriceId!, quantity: 1 }],
       success_url: `${appUrl}/dashboard/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${appUrl}/dashboard/billing/cancelled`,

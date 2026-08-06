@@ -1,21 +1,26 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
+import Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { handleStripeWebhook } from "@/services/billing/webhook";
-import { logWebhookDev } from "@/services/billing/webhook-logger";
+import { logWebhookDev, logWebhookError } from "@/services/billing/webhook-logger";
+
+// Ensure raw body + Node runtime for Stripe signature verification + Prisma.
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const body = await req.text();
   const signature = headers().get("stripe-signature");
 
   if (!signature) {
-    logWebhookDev("Rejected: missing stripe-signature header");
+    logWebhookError("Rejected: missing stripe-signature header");
     return NextResponse.json({ error: "Missing stripe-signature header" }, { status: 400 });
   }
 
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    logWebhookDev("Rejected: STRIPE_WEBHOOK_SECRET is not set in .env");
+    logWebhookError("Rejected: STRIPE_WEBHOOK_SECRET is not set");
     return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
   }
 
@@ -35,11 +40,14 @@ export async function POST(req: Request) {
     logWebhookDev("Event handled successfully", { id: event.id, type: event.type });
     return NextResponse.json({ received: true });
   } catch (err) {
-    console.error("Stripe webhook error:", err);
-    logWebhookDev("Event handling failed", {
+    logWebhookError("Event handling failed", {
       error: err instanceof Error ? err.message : "Unknown error",
     });
     const message = err instanceof Error ? err.message : "Webhook error";
-    return NextResponse.json({ error: message }, { status: 400 });
+    // Invalid signatures will never succeed — 400. Application/DB failures use 500 so Stripe retries.
+    if (err instanceof Stripe.errors.StripeSignatureVerificationError) {
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -8,7 +8,7 @@ import {
   notifyPurchaseCompleted,
   notifySubscriptionActivated,
 } from "@/services/notifications";
-import { logWebhookDev } from "./webhook-logger";
+import { logWebhookDev, logWebhookError } from "./webhook-logger";
 
 export type FulfillCheckoutResult =
   | {
@@ -33,7 +33,19 @@ export type FulfillCheckoutResult =
     };
 
 function resolveCheckoutType(session: Stripe.Checkout.Session): string | undefined {
-  return session.metadata?.checkoutType ?? session.metadata?.type;
+  const meta = session.metadata ?? {};
+  const fromMeta = meta.checkoutType || meta.type;
+  if (fromMeta) return fromMeta;
+
+  const purchaseType = meta.purchaseType;
+  if (purchaseType === "SUBSCRIPTION") return "subscription";
+  if (purchaseType === "ONE_TIME_PAPER") return "paper";
+  if (purchaseType === "ONE_TIME_MOCK_EXAM") return "mock_exam";
+
+  if (session.mode === "subscription") return "subscription";
+  if (session.mode === "payment" && meta.productId) return "product";
+
+  return undefined;
 }
 
 function resolvePaymentReference(session: Stripe.Checkout.Session): string {
@@ -52,61 +64,136 @@ function resolvePaymentReference(session: Stripe.Checkout.Session): string {
   return session.id;
 }
 
+/**
+ * Merge metadata from expanded customer/subscription/client_reference_id so
+ * webhook payloads missing fields still fulfill.
+ */
+export function enrichCheckoutSessionMetadata(
+  session: Stripe.Checkout.Session
+): Stripe.Checkout.Session {
+  const metadata: Record<string, string> = {
+    ...(session.metadata ?? {}),
+  };
+
+  if (!metadata.userId && session.client_reference_id) {
+    metadata.userId = session.client_reference_id;
+  }
+
+  const customer = session.customer;
+  if (customer && typeof customer !== "string" && "metadata" in customer && customer.metadata) {
+    if (!metadata.userId && customer.metadata.userId) {
+      metadata.userId = customer.metadata.userId;
+    }
+  }
+
+  const subscription = session.subscription;
+  if (subscription && typeof subscription !== "string") {
+    const subMeta = subscription.metadata ?? {};
+    if (!metadata.userId && subMeta.userId) metadata.userId = subMeta.userId;
+    if (!metadata.planId && subMeta.planId) metadata.planId = subMeta.planId;
+    if (!metadata.checkoutType && !metadata.type) {
+      metadata.checkoutType = subMeta.checkoutType || "subscription";
+    }
+    if (!metadata.purchaseType && subMeta.purchaseType) {
+      metadata.purchaseType = subMeta.purchaseType;
+    }
+  }
+
+  if (!metadata.checkoutType && !metadata.type) {
+    if (session.mode === "subscription") {
+      metadata.checkoutType = "subscription";
+    } else if (metadata.purchaseType === "ONE_TIME_PAPER") {
+      metadata.checkoutType = "paper";
+    } else if (metadata.purchaseType === "ONE_TIME_MOCK_EXAM") {
+      metadata.checkoutType = "mock_exam";
+    } else if (metadata.productId) {
+      metadata.checkoutType = "product";
+    }
+  }
+
+  return { ...session, metadata };
+}
+
 export async function fulfillCheckoutSession(
   session: Stripe.Checkout.Session
 ): Promise<FulfillCheckoutResult> {
+  const enriched = enrichCheckoutSessionMetadata(session);
+
   logWebhookDev("Fulfilling checkout session", {
-    sessionId: session.id,
-    mode: session.mode,
-    paymentStatus: session.payment_status,
-    metadata: session.metadata,
+    sessionId: enriched.id,
+    mode: enriched.mode,
+    paymentStatus: enriched.payment_status,
+    metadata: enriched.metadata,
   });
 
-  const userId = session.metadata?.userId;
-  const checkoutType = resolveCheckoutType(session);
+  if (enriched.payment_status === "unpaid") {
+    const reason = `Payment not completed yet (payment_status=${enriched.payment_status})`;
+    logWebhookDev(`Skipped: ${reason}`, { sessionId: enriched.id });
+    return { status: "skipped", reason };
+  }
+
+  const userId = enriched.metadata?.userId?.trim() || undefined;
+  const checkoutType = resolveCheckoutType(enriched);
 
   if (!userId) {
     const reason = "Missing userId in session metadata";
-    logWebhookDev(`Skipped: ${reason}`, { metadata: session.metadata });
+    logWebhookError(`Skipped: ${reason}`, { metadata: enriched.metadata, sessionId: enriched.id });
     return { status: "skipped", reason };
   }
 
   if (!checkoutType) {
     const reason = "Missing checkoutType/type in session metadata";
-    logWebhookDev(`Skipped: ${reason}`, { metadata: session.metadata });
+    logWebhookError(`Skipped: ${reason}`, { metadata: enriched.metadata, sessionId: enriched.id });
     return { status: "skipped", reason };
   }
 
   if (checkoutType === "subscription") {
-    return fulfillSubscriptionCheckout(session, userId);
+    return fulfillSubscriptionCheckout(enriched, userId);
   }
 
-  if (checkoutType === "paper" || checkoutType === "mock_exam") {
-    return fulfillProductCheckout(session, userId);
+  if (checkoutType === "paper" || checkoutType === "mock_exam" || checkoutType === "product") {
+    return fulfillProductCheckout(enriched, userId);
   }
 
   const reason = `Unsupported checkout type: ${checkoutType}`;
-  logWebhookDev(`Skipped: ${reason}`);
+  logWebhookError(`Skipped: ${reason}`, { sessionId: enriched.id });
   return { status: "skipped", reason };
+}
+
+async function ensureActiveSubscriptionAccess(
+  userId: string,
+  subscriptionId: string,
+  accessType: "MONTHLY_SUBSCRIPTION" | "YEARLY_SUBSCRIPTION"
+) {
+  const existing = await prisma.userAccess.findFirst({
+    where: { subscriptionId, status: "ACTIVE" },
+  });
+  if (existing) return existing;
+
+  return grantSubscriptionAccess(userId, subscriptionId, accessType);
 }
 
 async function fulfillSubscriptionCheckout(
   session: Stripe.Checkout.Session,
   userId: string
 ): Promise<FulfillCheckoutResult> {
-  const planId = session.metadata?.planId;
+  const planId = session.metadata?.planId?.trim() || undefined;
   if (!planId) {
     const reason = "Missing planId in session metadata";
-    logWebhookDev(`Skipped subscription: ${reason}`);
+    logWebhookError(`Skipped subscription: ${reason}`, { sessionId: session.id });
     return { status: "skipped", reason };
   }
 
   const plan = await prisma.plan.findUnique({ where: { id: planId } });
   if (!plan) {
     const reason = `Plan not found: ${planId}`;
-    logWebhookDev(`Skipped subscription: ${reason}`);
+    logWebhookError(`Skipped subscription: ${reason}`, { sessionId: session.id });
     return { status: "skipped", reason };
   }
+
+  const accessType = (plan.accessType === "YEARLY_SUBSCRIPTION"
+    ? "YEARLY_SUBSCRIPTION"
+    : "MONTHLY_SUBSCRIPTION") as "MONTHLY_SUBSCRIPTION" | "YEARLY_SUBSCRIPTION";
 
   const stripeSubId =
     typeof session.subscription === "string"
@@ -120,18 +207,16 @@ async function fulfillSubscriptionCheckout(
       });
 
   if (existing) {
-    const userAccess = await prisma.userAccess.findFirst({
-      where: { subscriptionId: existing.id, status: "ACTIVE" },
-    });
-    logWebhookDev("Subscription already fulfilled", {
+    const userAccess = await ensureActiveSubscriptionAccess(userId, existing.id, accessType);
+    logWebhookDev("Subscription already fulfilled (ensured access)", {
       subscriptionId: existing.id,
-      userAccessId: userAccess?.id,
+      userAccessId: userAccess.id,
     });
     return {
       status: "fulfilled",
       kind: "subscription",
       subscriptionId: existing.id,
-      userAccessId: userAccess?.id ?? "",
+      userAccessId: userAccess.id,
       paymentId: null,
       alreadyExisted: true,
     };
@@ -142,7 +227,7 @@ async function fulfillSubscriptionCheckout(
       userId,
       planId: plan.id,
       status: "ACTIVE",
-      accessType: plan.accessType as "MONTHLY_SUBSCRIPTION" | "YEARLY_SUBSCRIPTION",
+      accessType,
       priceCents: plan.priceCents,
       currency: plan.currency,
       provider: "stripe",
@@ -153,11 +238,7 @@ async function fulfillSubscriptionCheckout(
     },
   });
 
-  const userAccess = await grantSubscriptionAccess(
-    userId,
-    subscription.id,
-    plan.accessType as "MONTHLY_SUBSCRIPTION" | "YEARLY_SUBSCRIPTION"
-  );
+  const userAccess = await grantSubscriptionAccess(userId, subscription.id, accessType);
 
   let paymentId: string | null = null;
   const paymentReference = resolvePaymentReference(session);
@@ -200,7 +281,9 @@ async function fulfillSubscriptionCheckout(
   try {
     await notifySubscriptionActivated({ userId, planName: plan.name });
   } catch (notifyError) {
-    logWebhookDev("Failed to create subscription notification", { error: String(notifyError) });
+    logWebhookError("Failed to create subscription notification", {
+      error: String(notifyError),
+    });
   }
 
   return {
@@ -217,19 +300,25 @@ async function fulfillProductCheckout(
   session: Stripe.Checkout.Session,
   userId: string
 ): Promise<FulfillCheckoutResult> {
-  const productId = session.metadata?.productId;
+  const productId = session.metadata?.productId?.trim() || undefined;
   if (!productId) {
     const reason = "Missing productId in session metadata";
-    logWebhookDev(`Skipped product: ${reason}`);
+    logWebhookError(`Skipped product: ${reason}`, { sessionId: session.id });
     return { status: "skipped", reason };
   }
 
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) {
     const reason = `Product not found: ${productId}`;
-    logWebhookDev(`Skipped product: ${reason}`);
+    logWebhookError(`Skipped product: ${reason}`, { sessionId: session.id });
     return { status: "skipped", reason };
   }
+
+  const accessType = (
+    product.accessType === "ONE_TIME_MOCK_EXAM" || product.type === "MOCK_EXAM"
+      ? "ONE_TIME_MOCK_EXAM"
+      : "ONE_TIME_PAPER"
+  ) as "ONE_TIME_PAPER" | "ONE_TIME_MOCK_EXAM";
 
   const paymentReference = resolvePaymentReference(session);
 
@@ -244,21 +333,30 @@ async function fulfillProductCheckout(
   });
 
   if (existingPurchase) {
-    const userAccess = await prisma.userAccess.findFirst({
+    let userAccess = await prisma.userAccess.findFirst({
       where: { purchaseId: existingPurchase.id, status: "ACTIVE" },
     });
+    if (!userAccess) {
+      userAccess = await grantPurchaseAccess(
+        userId,
+        existingPurchase.id,
+        accessType,
+        product.paperId,
+        product.mockExamId
+      );
+    }
     const payment = await prisma.payment.findFirst({
       where: { purchaseId: existingPurchase.id },
     });
-    logWebhookDev("Purchase already fulfilled", {
+    logWebhookDev("Purchase already fulfilled (ensured access)", {
       purchaseId: existingPurchase.id,
-      userAccessId: userAccess?.id,
+      userAccessId: userAccess.id,
     });
     return {
       status: "fulfilled",
       kind: "purchase",
       purchaseId: existingPurchase.id,
-      userAccessId: userAccess?.id ?? "",
+      userAccessId: userAccess.id,
       paymentId: payment?.id ?? "",
       alreadyExisted: true,
     };
@@ -269,7 +367,7 @@ async function fulfillProductCheckout(
       userId,
       productId: product.id,
       type: product.type === "PAPER" ? "ONE_TIME_PAPER" : "ONE_TIME_MOCK_EXAM",
-      accessType: product.accessType,
+      accessType,
       paperId: product.paperId,
       mockExamId: product.mockExamId,
       status: "COMPLETED",
@@ -285,7 +383,7 @@ async function fulfillProductCheckout(
   const userAccess = await grantPurchaseAccess(
     userId,
     purchase.id,
-    product.accessType as "ONE_TIME_PAPER" | "ONE_TIME_MOCK_EXAM",
+    accessType,
     product.paperId,
     product.mockExamId
   );
@@ -316,7 +414,7 @@ async function fulfillProductCheckout(
   try {
     await notifyPurchaseCompleted({ userId, productName: product.name });
   } catch (notifyError) {
-    logWebhookDev("Failed to create purchase notification", { error: String(notifyError) });
+    logWebhookError("Failed to create purchase notification", { error: String(notifyError) });
   }
 
   return {
