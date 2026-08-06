@@ -32,7 +32,8 @@ export function isStudent(role: Role | string | undefined | null): boolean {
 }
 
 export function homePathForRole(role: Role | string | undefined | null): string {
-  if (isOwner(role) || isContentAdmin(role)) return "/admin";
+  if (isOwner(role)) return "/admin";
+  if (isContentAdmin(role)) return "/admin/questions";
   if (isPartnerAdmin(role)) return "/partner";
   if (isLecturer(role)) return "/lecturer";
   return "/dashboard";

@@ -27,8 +27,34 @@ export async function POST(req: Request) {
       );
     }
 
-    const { name, email, password } = parsed.data;
+    const { name, email, password, schoolId, registrationSourceId } = parsed.data;
     const normalizedEmail = email.toLowerCase();
+
+    const school = await prisma.partner.findFirst({
+      where: {
+        id: schoolId,
+        status: "ACTIVE",
+        allowPublicRegistration: true,
+      },
+      select: { id: true },
+    });
+    if (!school) {
+      return NextResponse.json(
+        { error: "Please select a valid school that is accepting registrations." },
+        { status: 400 }
+      );
+    }
+
+    const source = await prisma.registrationSource.findFirst({
+      where: { id: registrationSourceId, isActive: true },
+      select: { id: true },
+    });
+    if (!source) {
+      return NextResponse.json(
+        { error: "Please select a valid option for how you heard about us." },
+        { status: 400 }
+      );
+    }
 
     const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
     if (existing) {
@@ -42,6 +68,8 @@ export async function POST(req: Request) {
         name,
         email: normalizedEmail,
         passwordHash,
+        partnerId: school.id,
+        registrationSourceId: source.id,
         profile: { create: {} },
       },
     });

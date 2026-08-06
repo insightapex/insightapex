@@ -36,27 +36,45 @@ function RegisterForm() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/register/options");
+        const res = await fetch("/api/register/options", { cache: "no-store" });
         const data = await res.json();
-        if (!cancelled && res.ok) {
-          const schoolList: Option[] = data.schools ?? [];
-          setSchools(schoolList);
-          setSources(data.sources ?? []);
+        if (cancelled) return;
+        if (!res.ok) {
+          setError(
+            typeof data.error === "string"
+              ? data.error
+              : "Could not load schools and signup sources. Run npm run db:seed if this is a fresh database."
+          );
+          setSchools([]);
+          setSources([]);
+          return;
+        }
+        const schoolList: Option[] = data.schools ?? [];
+        const sourceList: Option[] = data.sources ?? [];
+        setSchools(schoolList);
+        setSources(sourceList);
 
-          if (schoolIdFromUrl) {
-            const match = schoolList.find((s) => s.id === schoolIdFromUrl);
-            if (match) {
-              setForm((prev) => ({ ...prev, schoolId: match.id }));
-              setSchoolLocked(true);
-            } else {
-              setError(
-                "This school is not accepting public signups right now. Choose another school or ask your school admin."
-              );
-            }
+        if (schoolList.length === 0 || sourceList.length === 0) {
+          setError(
+            "No schools or referral sources are configured yet. Ask an admin to seed the database (npm run db:seed)."
+          );
+        }
+
+        if (schoolIdFromUrl) {
+          const match = schoolList.find((s) => s.id === schoolIdFromUrl);
+          if (match) {
+            setForm((prev) => ({ ...prev, schoolId: match.id }));
+            setSchoolLocked(true);
+          } else {
+            setError(
+              "This school is not accepting public signups right now. Choose another school or ask your school admin."
+            );
           }
         }
       } catch {
-        /* options preload is best-effort; server still validates */
+        if (!cancelled) {
+          setError("Could not load registration options. Check your connection and try again.");
+        }
       } finally {
         if (!cancelled) setOptionsLoading(false);
       }
@@ -141,7 +159,7 @@ function RegisterForm() {
           value={form.schoolId}
           onChange={(e) => setForm({ ...form, schoolId: e.target.value })}
           options={schools.map((s) => ({ value: s.id, label: s.name }))}
-          disabled={schoolLocked || optionsLoading}
+          disabled={schoolLocked || optionsLoading || schools.length === 0}
         />
         {schoolLocked && selectedSchool && (
           <p className="text-xs text-emerald-700">
@@ -156,6 +174,7 @@ function RegisterForm() {
           value={form.registrationSourceId}
           onChange={(e) => setForm({ ...form, registrationSourceId: e.target.value })}
           options={sources.map((s) => ({ value: s.id, label: s.name }))}
+          disabled={optionsLoading || sources.length === 0}
         />
         {error && <Alert tone="error">{error}</Alert>}
         <Button type="submit" className="w-full" disabled={loading}>

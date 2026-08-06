@@ -10,7 +10,8 @@ function getClientIp(req: NextRequest): string {
 }
 
 function homeForRole(role: unknown): string {
-  if (role === "OWNER" || role === "CONTENT_ADMIN") return "/admin";
+  if (role === "OWNER") return "/admin";
+  if (role === "CONTENT_ADMIN") return "/admin/questions";
   if (role === "PARTNER_ADMIN") return "/partner";
   if (role === "LECTURER") return "/lecturer";
   return "/dashboard";
@@ -42,6 +43,14 @@ async function getMaintenanceFlags(req: NextRequest) {
   }
 }
 
+function withRequestHeader(req: NextRequest, key: string, value: string) {
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set(key, value);
+  return NextResponse.next({
+    request: { headers: requestHeaders },
+  });
+}
+
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
 
@@ -69,7 +78,18 @@ export async function middleware(req: NextRequest) {
     }
   }
 
-  if (path.startsWith("/admin") && path !== "/admin/login") {
+  // ----- Owner / Content Admin portal -----
+  // Login page is public; already-authenticated staff leave immediately (no login form in shell).
+  if (path === "/admin/login") {
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+    if (token?.role === "OWNER" || token?.role === "CONTENT_ADMIN") {
+      return NextResponse.redirect(new URL(homeForRole(token.role), req.url));
+    }
+    // Mark so admin/layout never wraps login with AdminShell
+    return withRequestHeader(req, "x-admin-auth-page", "1");
+  }
+
+  if (path.startsWith("/admin")) {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
     if (!token) {
       return NextResponse.redirect(new URL("/admin/login", req.url));
@@ -80,6 +100,7 @@ export async function middleware(req: NextRequest) {
     if (token.role === "CONTENT_ADMIN" && !isContentAdminAllowedPath(path)) {
       return NextResponse.redirect(new URL("/admin/questions", req.url));
     }
+    return NextResponse.next();
   }
 
   // Partner Portal — separate from student dashboard; PARTNER_ADMIN only.
