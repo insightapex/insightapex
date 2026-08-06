@@ -56,7 +56,7 @@ export function DashboardShell({ userName, children }: DashboardShellProps) {
         isPremium={isPremium}
       />
 
-      {/* Content — capped width so large screens keep side breathing room */}
+      {/* Content — width of main column after sidebar; page container sets ~20% total side space */}
       <main
         className={cn(
           "relative min-w-0 transition-[padding-left] duration-300",

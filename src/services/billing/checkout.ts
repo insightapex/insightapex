@@ -1,9 +1,34 @@
 import { prisma } from "@/lib/prisma";
 import { getAppUrl, getStripe } from "@/lib/stripe";
-import { getOrCreateStripeCustomer } from "./stripe-customer";
+import {
+  getOrCreateStripeCustomer,
+  isMissingStripeCustomer,
+  recreateStripeCustomer,
+} from "./stripe-customer";
 import { STRIPE_PRICE_NOT_CONFIGURED } from "./errors";
 
 type CheckoutType = "subscription" | "paper" | "mock_exam";
+
+async function withValidStripeCustomer(
+  userId: string,
+  email: string,
+  createSession: (customerId: string) => Promise<{ url: string | null }>
+): Promise<string> {
+  let customerId = await getOrCreateStripeCustomer(userId, email);
+
+  try {
+    const session = await createSession(customerId);
+    if (!session.url) throw new Error("Failed to create checkout session");
+    return session.url;
+  } catch (err) {
+    // Race / deleted customer after retrieve: create once and retry.
+    if (!isMissingStripeCustomer(err)) throw err;
+    customerId = await recreateStripeCustomer(userId, email);
+    const session = await createSession(customerId);
+    if (!session.url) throw new Error("Failed to create checkout session");
+    return session.url;
+  }
+}
 
 export async function createSubscriptionCheckout(
   userId: string,
@@ -23,7 +48,6 @@ export async function createSubscriptionCheckout(
     throw new Error("Free plan does not require checkout");
   }
 
-  const customerId = await getOrCreateStripeCustomer(userId, email);
   const stripe = getStripe();
   const appUrl = getAppUrl();
 
@@ -36,26 +60,25 @@ export async function createSubscriptionCheckout(
     type: "subscription",
   };
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "subscription",
-    customer: customerId,
-    line_items: [{ price: plan.providerPriceId, quantity: 1 }],
-    success_url: `${appUrl}/dashboard/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${appUrl}/dashboard/billing/cancelled`,
-    subscription_data: {
-      metadata: {
-        userId,
-        planId: plan.id,
-        productId: "",
-        purchaseType: "SUBSCRIPTION",
-        checkoutType: "subscription",
+  return withValidStripeCustomer(userId, email, (customerId) =>
+    stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      line_items: [{ price: plan.providerPriceId!, quantity: 1 }],
+      success_url: `${appUrl}/dashboard/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}/dashboard/billing/cancelled`,
+      subscription_data: {
+        metadata: {
+          userId,
+          planId: plan.id,
+          productId: "",
+          purchaseType: "SUBSCRIPTION",
+          checkoutType: "subscription",
+        },
       },
-    },
-    metadata,
-  });
-
-  if (!session.url) throw new Error("Failed to create checkout session");
-  return session.url;
+      metadata,
+    })
+  );
 }
 
 export async function createProductCheckout(
@@ -73,7 +96,6 @@ export async function createProductCheckout(
     throw new Error(STRIPE_PRICE_NOT_CONFIGURED);
   }
 
-  const customerId = await getOrCreateStripeCustomer(userId, email);
   const stripe = getStripe();
   const appUrl = getAppUrl();
 
@@ -83,24 +105,23 @@ export async function createProductCheckout(
   const purchaseType =
     product.type === "PAPER" ? "ONE_TIME_PAPER" : "ONE_TIME_MOCK_EXAM";
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "payment",
-    customer: customerId,
-    line_items: [{ price: product.providerPriceId, quantity: 1 }],
-    success_url: `${appUrl}/dashboard/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${appUrl}/dashboard/billing/cancelled`,
-    metadata: {
-      userId,
-      type: checkoutType,
-      checkoutType,
-      planId: "",
-      productId: product.id,
-      purchaseType,
-      paperId: product.paperId ?? "",
-      mockExamId: product.mockExamId ?? "",
-    },
-  });
-
-  if (!session.url) throw new Error("Failed to create checkout session");
-  return session.url;
+  return withValidStripeCustomer(userId, email, (customerId) =>
+    stripe.checkout.sessions.create({
+      mode: "payment",
+      customer: customerId,
+      line_items: [{ price: product.providerPriceId!, quantity: 1 }],
+      success_url: `${appUrl}/dashboard/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}/dashboard/billing/cancelled`,
+      metadata: {
+        userId,
+        type: checkoutType,
+        checkoutType,
+        planId: "",
+        productId: product.id,
+        purchaseType,
+        paperId: product.paperId ?? "",
+        mockExamId: product.mockExamId ?? "",
+      },
+    })
+  );
 }

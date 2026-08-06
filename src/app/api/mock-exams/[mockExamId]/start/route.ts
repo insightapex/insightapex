@@ -127,9 +127,10 @@ export async function POST(_req: Request, { params }: { params: { mockExamId: st
       quizSettings: {
         allowPreviousQuestion: settings.allowPreviousQuestion,
         allowQuestionFlagging: settings.allowQuestionFlagging,
-        allowDifficultyRating: settings.allowDifficultyRating,
-        allowAnswerReview: settings.allowAnswerReview,
-        showExplanationAfterCheck: settings.showExplanationAfterCheck,
+        // Mock exams: hide check-answer, difficulty rating, and mid-test explanations
+        allowDifficultyRating: false,
+        allowAnswerReview: false,
+        showExplanationAfterCheck: false,
         allowBookmarks: settings.allowBookmarks,
       },
     });

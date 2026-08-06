@@ -27,8 +27,8 @@ type PreviewRow = {
   subCategoryTitle: string;
   questionType: string;
   reviewStatus: string;
-  status: "valid" | "invalid" | "duplicate_in_file";
-  action: "CREATE" | "UPDATE" | "SKIP" | null;
+  status: "valid" | "invalid" | "duplicate_in_file" | "duplicate_existing";
+  action: "CREATE" | "SKIP" | null;
   errorMessage: string | null;
 };
 
@@ -41,6 +41,8 @@ type PreviewSummary = {
   newQuestions: number;
   existingToUpdate: number;
   duplicateRows: number;
+  duplicateExistingRows: number;
+  hasDuplicates: boolean;
   rows: PreviewRow[];
 };
 
@@ -153,7 +155,7 @@ export default function QuestionImportPage() {
     <div className="space-y-8">
       <PageHeader
         title="Import Excel"
-        description="Upload an FA Question Bank–style .xlsx workbook. Excel ID is stored as a unique external question ID (create or update)."
+        description="Upload an FA Question Bank–style .xlsx workbook. Excel Question IDs must be unique — duplicates in the file or IDs that already exist in the system are rejected and nothing is imported."
         action={{
           label: "Import history",
           href: "/admin/questions/import/history",
@@ -254,12 +256,24 @@ export default function QuestionImportPage() {
                 <Stat label="Valid rows" value={String(preview.validRows)} />
                 <Stat label="Invalid rows" value={String(preview.invalidRows)} />
                 <Stat label="New questions" value={String(preview.newQuestions)} />
-                <Stat label="Existing to update" value={String(preview.existingToUpdate)} />
-                <Stat label="Duplicate rows" value={String(preview.duplicateRows)} />
+                <Stat label="Duplicates in file" value={String(preview.duplicateRows)} />
+                <Stat
+                  label="Already in system"
+                  value={String(preview.duplicateExistingRows ?? 0)}
+                />
               </div>
               <p className="text-xs text-slate-500">
                 Sheets: {preview.sheetsDetected.join(", ") || "—"}
               </p>
+
+              {preview.hasDuplicates && (
+                <Alert tone="error">
+                  This file is duplicated. One or more Question IDs are repeated in the Excel file or
+                  already exist in InsightApex ({preview.duplicateRows} in-file ·{" "}
+                  {preview.duplicateExistingRows ?? 0} already in system). Fix the file and upload
+                  again — import is blocked while duplicates remain.
+                </Alert>
+              )}
 
               <div className="flex flex-wrap items-center gap-3">
                 <label className="flex items-center gap-2 text-sm">
@@ -283,9 +297,13 @@ export default function QuestionImportPage() {
               <div className="flex flex-wrap gap-2">
                 <Button
                   onClick={() => void confirmImport()}
-                  disabled={busy || preview.validRows === 0}
+                  disabled={busy || preview.validRows === 0 || preview.hasDuplicates}
                 >
-                  {busy ? "Importing…" : `Confirm import (${preview.validRows} valid)`}
+                  {busy
+                    ? "Importing…"
+                    : preview.hasDuplicates
+                      ? "Import blocked — file is duplicated"
+                      : `Confirm import (${preview.validRows} valid)`}
                 </Button>
                 <Button variant="outline" onClick={reset} disabled={busy}>
                   Cancel
@@ -336,14 +354,17 @@ export default function QuestionImportPage() {
                             tone={
                               r.status === "valid"
                                 ? "success"
-                                : r.status === "duplicate_in_file"
+                                : r.status === "duplicate_in_file" ||
+                                    r.status === "duplicate_existing"
                                   ? "warning"
                                   : "danger"
                             }
                           >
                             {r.status === "valid"
                               ? r.action ?? "valid"
-                              : r.status.replace(/_/g, " ")}
+                              : r.status === "duplicate_existing"
+                                ? "already exists"
+                                : r.status.replace(/_/g, " ")}
                           </Badge>
                         </TableCell>
                         <TableCell className="max-w-xs text-xs text-red-600">

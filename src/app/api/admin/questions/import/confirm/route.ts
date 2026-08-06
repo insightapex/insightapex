@@ -66,6 +66,19 @@ export async function POST(req: NextRequest) {
       createMissingTaxonomy: body.createMissingTaxonomy,
     });
 
+    if (summary.hasDuplicates) {
+      return NextResponse.json(
+        {
+          error:
+            "This file is duplicated. One or more Question IDs are repeated in the Excel file " +
+            "or already exist in InsightApex. Remove those rows (or use new Question IDs) and upload again. " +
+            `In-file duplicates: ${summary.duplicateRows}; already exist: ${summary.duplicateExistingRows}.`,
+          preview: summary,
+        },
+        { status: 400 }
+      );
+    }
+
     if (validRows.length === 0) {
       return NextResponse.json(
         {

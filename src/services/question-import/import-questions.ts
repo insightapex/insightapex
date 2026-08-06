@@ -1,6 +1,6 @@
 /**
  * Persist validated Excel rows into InsightApex (PRACTICE questions only).
- * Uses externalQuestionId as the stable upsert key.
+ * Creates only — duplicates (existing externalQuestionId) are rejected upstream.
  */
 
 import type { Prisma } from "@prisma/client";
@@ -150,49 +150,32 @@ export async function runQuestionImport(
             });
 
             if (existing) {
-              await tx.answerOption.deleteMany({ where: { questionId: existing.id } });
-              await tx.question.update({
-                where: { id: existing.id },
-                data: {
-                  subCategoryId,
-                  text: row.questionText,
-                  explanation: row.explanationEn,
-                  explanationMy: row.explanationMy,
-                  learningOutcome: row.learningOutcome,
-                  questionType: row.questionType,
-                  difficulty: row.difficulty,
-                  accessLevel,
-                  purpose: "PRACTICE",
-                  reviewStatus: row.reviewStatus,
-                  isActive: row.isActive,
-                  lastImportedAt: new Date(),
-                  options: { create: optionData },
-                },
-              });
-              updated += 1;
-              updatedExternalIds.push(row.externalQuestionId);
-            } else {
-              await tx.question.create({
-                data: {
-                  externalQuestionId: row.externalQuestionId,
-                  subCategoryId,
-                  text: row.questionText,
-                  explanation: row.explanationEn,
-                  explanationMy: row.explanationMy,
-                  learningOutcome: row.learningOutcome,
-                  questionType: row.questionType,
-                  difficulty: row.difficulty,
-                  accessLevel,
-                  purpose: "PRACTICE",
-                  reviewStatus: row.reviewStatus,
-                  isActive: row.isActive,
-                  lastImportedAt: new Date(),
-                  options: { create: optionData },
-                },
-              });
-              created += 1;
-              createdExternalIds.push(row.externalQuestionId);
+              // Safety net — validation should have blocked these already
+              throw new Error(
+                `Duplicate: question ID "${row.externalQuestionId}" already exists (row ${row.rowNumber}). This file is duplicated.`
+              );
             }
+
+            await tx.question.create({
+              data: {
+                externalQuestionId: row.externalQuestionId,
+                subCategoryId,
+                text: row.questionText,
+                explanation: row.explanationEn,
+                explanationMy: row.explanationMy,
+                learningOutcome: row.learningOutcome,
+                questionType: row.questionType,
+                difficulty: row.difficulty,
+                accessLevel,
+                purpose: "PRACTICE",
+                reviewStatus: row.reviewStatus,
+                isActive: row.isActive,
+                lastImportedAt: new Date(),
+                options: { create: optionData },
+              },
+            });
+            created += 1;
+            createdExternalIds.push(row.externalQuestionId);
           } catch (e) {
             failed += 1;
             failures.push({

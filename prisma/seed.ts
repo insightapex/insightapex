@@ -6,76 +6,43 @@ const DifficultyLevel = { EASY: "EASY", MEDIUM: "MEDIUM", HARD: "HARD" } as cons
 const AccessLevel = { FREE: "FREE", PREMIUM: "PREMIUM" } as const;
 const prisma = new PrismaClient();
 
+/**
+ * Seed order (idempotent):
+ * Parts → Papers → Categories → Sub Categories → Questions → Plans/Products → Users
+ * Then demo partner/school rows (users + papers already exist).
+ */
 async function main() {
   console.log("Seeding InsightApex database...");
 
-  const adminPassword = await bcrypt.hash("Admin@12345", 10);
-  const studentPassword = await bcrypt.hash("Student@12345", 10);
-
-  await prisma.user.upsert({
-    where: { email: "admin@insightapex.com" },
-    update: { role: Role.OWNER, name: "InsightApex Owner" },
-    create: {
-      name: "InsightApex Owner",
-      email: "admin@insightapex.com",
-      passwordHash: adminPassword,
-      role: Role.OWNER,
-      emailVerified: new Date(),
-    },
-  });
-
-  const contentAdminPassword = await bcrypt.hash("Content@12345", 10);
-  await prisma.user.upsert({
-    where: { email: "content@insightapex.com" },
-    update: { role: "CONTENT_ADMIN" },
-    create: {
-      name: "Content Admin",
-      email: "content@insightapex.com",
-      passwordHash: contentAdminPassword,
-      role: "CONTENT_ADMIN",
-      emailVerified: new Date(),
-    },
-  });
-
-  await prisma.user.upsert({
-    where: { email: "student@insightapex.com" },
-    update: { name: "Sarah Johnson", role: Role.STUDENT },
-    create: {
-      name: "Sarah Johnson",
-      email: "student@insightapex.com",
-      passwordHash: studentPassword,
-      role: Role.STUDENT,
-      emailVerified: new Date(),
-      profile: { create: { bio: "ACCA student preparing for PM and FR." } },
-    },
-  });
-
-  const parts = [
+  // ---------------------------------------------------------------------------
+  // 1. Parts (resolve by stable unique `code`; never invent paper.partId blindly)
+  // ---------------------------------------------------------------------------
+  const partDefs = [
     {
-      id: "part_applied_knowledge",
       code: "PART_1",
       title: "Applied Knowledge",
-      description: "Foundational ACCA papers including Business and Technology, Management Accounting, and Financial Accounting.",
+      description:
+        "Foundational ACCA papers including Business and Technology, Management Accounting, and Financial Accounting.",
       order: 1,
     },
     {
-      id: "part_applied_skills",
       code: "PART_2",
       title: "Applied Skills",
       description: "Intermediate ACCA papers building on applied knowledge.",
       order: 2,
     },
     {
-      id: "part_strategic_professional",
       code: "PART_3",
       title: "Strategic Professional",
       description: "Advanced strategic professional level papers.",
       order: 3,
     },
-  ];
+  ] as const;
 
-  for (const part of parts) {
-    await prisma.part.upsert({
+  const partIdByCode = new Map<string, string>();
+
+  for (const part of partDefs) {
+    const row = await prisma.part.upsert({
       where: { code: part.code },
       update: {
         title: part.title,
@@ -83,8 +50,9 @@ async function main() {
         order: part.order,
         isActive: true,
       },
+      // Do not force a fixed id — migration may already have created PART_* rows
+      // with different ids (e.g. part_seed_1). Upsert by code returns the real id.
       create: {
-        id: part.id,
         code: part.code,
         title: part.title,
         description: part.description,
@@ -92,33 +60,93 @@ async function main() {
         isActive: true,
       },
     });
+    partIdByCode.set(part.code, row.id);
   }
 
-  const papers = [
-    { code: "BT", title: "Business and Technology", description: "Foundations of business organisation, governance, and technology.", partId: "part_applied_knowledge" },
-    { code: "MA", title: "Management Accounting", description: "Core management accounting techniques for planning and control.", partId: "part_applied_knowledge" },
-    { code: "FA", title: "Financial Accounting", description: "Principles of double-entry bookkeeping and financial statements.", partId: "part_applied_knowledge" },
-    { code: "PM", title: "Performance Management", description: "Advanced management accounting for decision-making and performance.", partId: "part_applied_skills" },
-    { code: "FR", title: "Financial Reporting", description: "Preparation and interpretation of financial statements under IFRS.", partId: "part_applied_skills" },
-    { code: "SBR", title: "Strategic Business Reporting", description: "Advanced financial reporting and interpretation.", partId: "part_strategic_professional", premium: true },
+  // ---------------------------------------------------------------------------
+  // 2–5. Papers → Categories → Sub Categories → Questions
+  // ---------------------------------------------------------------------------
+  const paperDefs: Array<{
+    code: string;
+    title: string;
+    description: string;
+    partCode: (typeof partDefs)[number]["code"];
+    premium?: boolean;
+  }> = [
+    {
+      code: "BT",
+      title: "Business and Technology",
+      description: "Foundations of business organisation, governance, and technology.",
+      partCode: "PART_1",
+    },
+    {
+      code: "MA",
+      title: "Management Accounting",
+      description: "Core management accounting techniques for planning and control.",
+      partCode: "PART_1",
+    },
+    {
+      code: "FA",
+      title: "Financial Accounting",
+      description: "Principles of double-entry bookkeeping and financial statements.",
+      partCode: "PART_1",
+    },
+    {
+      code: "PM",
+      title: "Performance Management",
+      description: "Advanced management accounting for decision-making and performance.",
+      partCode: "PART_2",
+    },
+    {
+      code: "FR",
+      title: "Financial Reporting",
+      description: "Preparation and interpretation of financial statements under IFRS.",
+      partCode: "PART_2",
+    },
+    {
+      code: "SBR",
+      title: "Strategic Business Reporting",
+      description: "Advanced financial reporting and interpretation.",
+      partCode: "PART_3",
+      premium: true,
+    },
   ];
 
   let premiumPaperId: string | null = null;
 
-  for (const p of papers) {
-    const isPremium = "premium" in p && p.premium;
+  for (const p of paperDefs) {
+    const partId = partIdByCode.get(p.partCode);
+    if (!partId) {
+      throw new Error(`Seed failed: Part with code "${p.partCode}" was not loaded before papers.`);
+    }
+
+    const isPremium = Boolean(p.premium);
     const paper = await prisma.paper.upsert({
       where: { code: p.code },
-      update: isPremium
-        ? { accessLevel: AccessLevel.PREMIUM, isPremium: true, priceCents: 499, currency: "GBP", partId: p.partId }
-        : { partId: p.partId },
+      update: {
+        title: p.title,
+        description: p.description,
+        partId,
+        ...(isPremium
+          ? {
+              accessLevel: AccessLevel.PREMIUM,
+              isPremium: true,
+              priceCents: 499,
+              currency: "GBP",
+            }
+          : {
+              accessLevel: AccessLevel.FREE,
+              isPremium: false,
+            }),
+        isActive: true,
+      },
       create: {
         code: p.code,
         title: p.title,
         description: p.description,
-        partId: p.partId,
+        partId,
         accessLevel: isPremium ? AccessLevel.PREMIUM : AccessLevel.FREE,
-        isPremium: Boolean(isPremium),
+        isPremium,
         priceCents: isPremium ? 499 : null,
         currency: "GBP",
         isActive: true,
@@ -127,6 +155,7 @@ async function main() {
 
     if (isPremium) premiumPaperId = paper.id;
 
+    // Idempotent category tree: skip if this paper already has categories
     const existingCategories = await prisma.category.count({ where: { paperId: paper.id } });
     if (existingCategories > 0) continue;
 
@@ -160,7 +189,11 @@ async function main() {
             explanation:
               "This is a placeholder explanation describing why the correct option is right and why the others are incorrect.",
             difficulty:
-              i % 3 === 0 ? DifficultyLevel.HARD : i % 2 === 0 ? DifficultyLevel.MEDIUM : DifficultyLevel.EASY,
+              i % 3 === 0
+                ? DifficultyLevel.HARD
+                : i % 2 === 0
+                  ? DifficultyLevel.MEDIUM
+                  : DifficultyLevel.EASY,
             marks: 2,
             isActive: true,
             options: {
@@ -177,7 +210,9 @@ async function main() {
     }
   }
 
-  // Billing plans
+  // ---------------------------------------------------------------------------
+  // 6. Plans / Products (+ mock exam content for products)
+  // ---------------------------------------------------------------------------
   await prisma.plan.upsert({
     where: { slug: "free" },
     update: {},
@@ -247,60 +282,68 @@ async function main() {
 
   // Premium mock exam with dedicated MOCK_EXAM questions (not practice pool)
   let mockExamId: string | null = null;
-  if (premiumPaperId) {
-    const pmPaper = await prisma.paper.findUnique({ where: { code: "PM" } });
-    if (pmPaper) {
-      const mockExam = await prisma.mockExam.upsert({
-        where: { id: "seed-premium-mock-pm" },
-        update: {},
-        create: {
-          id: "seed-premium-mock-pm",
-          paperId: pmPaper.id,
-          title: "PM Full Mock Exam",
-          description: "A full-length Performance Management mock exam with timed conditions.",
-          durationMinutes: 40,
-          passMarkPercent: 50,
-          status: "PUBLISHED",
-          accessLevel: AccessLevel.PREMIUM,
-          isPremium: true,
-          priceCents: 299,
-          currency: "GBP",
-          isActive: true,
-        },
-      });
-      mockExamId = mockExam.id;
+  const pmPaper = await prisma.paper.findUnique({ where: { code: "PM" } });
+  if (pmPaper) {
+    const mockExam = await prisma.mockExam.upsert({
+      where: { id: "seed-premium-mock-pm" },
+      update: {
+        paperId: pmPaper.id,
+        title: "PM Full Mock Exam",
+        description: "A full-length Performance Management mock exam with timed conditions.",
+        status: "PUBLISHED",
+        accessLevel: AccessLevel.PREMIUM,
+        isPremium: true,
+        priceCents: 299,
+        currency: "GBP",
+        isActive: true,
+      },
+      create: {
+        id: "seed-premium-mock-pm",
+        paperId: pmPaper.id,
+        title: "PM Full Mock Exam",
+        description: "A full-length Performance Management mock exam with timed conditions.",
+        durationMinutes: 40,
+        passMarkPercent: 50,
+        status: "PUBLISHED",
+        accessLevel: AccessLevel.PREMIUM,
+        isPremium: true,
+        priceCents: 299,
+        currency: "GBP",
+        isActive: true,
+      },
+    });
+    mockExamId = mockExam.id;
 
-      const existingLinks = await prisma.mockExamQuestion.count({ where: { mockExamId: mockExam.id } });
-      if (existingLinks === 0) {
-        for (let i = 1; i <= 8; i++) {
-          const mockQuestion = await prisma.question.create({
-            data: {
-              purpose: "MOCK_EXAM",
-              subCategoryId: null,
-              accessLevel: "PREMIUM",
-              text: `PM mock exam Q${i}: which statement best reflects performance management under exam conditions?`,
-              explanation: "Placeholder mock-exam explanation.",
-              difficulty: DifficultyLevel.MEDIUM,
-              marks: 2,
-              isActive: true,
-              options: {
-                create: [
-                  { text: "Option A", isCorrect: i % 4 === 1, order: 0 },
-                  { text: "Option B", isCorrect: i % 4 === 2, order: 1 },
-                  { text: "Option C", isCorrect: i % 4 === 3, order: 2 },
-                  { text: "Option D", isCorrect: i % 4 === 0, order: 3 },
-                ],
-              },
+    const existingLinks = await prisma.mockExamQuestion.count({ where: { mockExamId: mockExam.id } });
+    if (existingLinks === 0) {
+      for (let i = 1; i <= 8; i++) {
+        const mockQuestion = await prisma.question.create({
+          data: {
+            purpose: "MOCK_EXAM",
+            subCategoryId: null,
+            accessLevel: "PREMIUM",
+            text: `PM mock exam Q${i}: which statement best reflects performance management under exam conditions?`,
+            explanation: "Placeholder mock-exam explanation.",
+            difficulty: DifficultyLevel.MEDIUM,
+            marks: 2,
+            isActive: true,
+            options: {
+              create: [
+                { text: "Option A", isCorrect: i % 4 === 1, order: 0 },
+                { text: "Option B", isCorrect: i % 4 === 2, order: 1 },
+                { text: "Option C", isCorrect: i % 4 === 3, order: 2 },
+                { text: "Option D", isCorrect: i % 4 === 0, order: 3 },
+              ],
             },
-          });
-          await prisma.mockExamQuestion.create({
-            data: {
-              mockExamId: mockExam.id,
-              questionId: mockQuestion.id,
-              order: i - 1,
-            },
-          });
-        }
+          },
+        });
+        await prisma.mockExamQuestion.create({
+          data: {
+            mockExamId: mockExam.id,
+            questionId: mockQuestion.id,
+            order: i - 1,
+          },
+        });
       }
     }
   }
@@ -309,7 +352,7 @@ async function main() {
   if (premiumPaperId) {
     await prisma.product.upsert({
       where: { slug: "sbr-paper-pack" },
-      update: {},
+      update: { paperId: premiumPaperId, isActive: true },
       create: {
         name: "SBR Paper Pack",
         slug: "sbr-paper-pack",
@@ -331,7 +374,7 @@ async function main() {
   if (mockExamId) {
     await prisma.product.upsert({
       where: { slug: "pm-mock-exam" },
-      update: {},
+      update: { mockExamId, isActive: true },
       create: {
         name: "PM Mock Exam",
         slug: "pm-mock-exam",
@@ -350,12 +393,49 @@ async function main() {
     });
   }
 
-  console.log("Seed complete.");
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Owner login: admin@insightapex.com / Admin@12345");
-    console.log("Content admin: content@insightapex.com / Content@12345");
-    console.log("Student login: student@insightapex.com / Student@12345");
-  }
+  // ---------------------------------------------------------------------------
+  // 7. Users (after content + billing catalog)
+  // ---------------------------------------------------------------------------
+  const adminPassword = await bcrypt.hash("Admin@12345", 10);
+  const studentPassword = await bcrypt.hash("Student@12345", 10);
+  const contentAdminPassword = await bcrypt.hash("Content@12345", 10);
+
+  await prisma.user.upsert({
+    where: { email: "admin@insightapex.com" },
+    update: { role: Role.OWNER, name: "InsightApex Owner" },
+    create: {
+      name: "InsightApex Owner",
+      email: "admin@insightapex.com",
+      passwordHash: adminPassword,
+      role: Role.OWNER,
+      emailVerified: new Date(),
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: "content@insightapex.com" },
+    update: { role: "CONTENT_ADMIN" },
+    create: {
+      name: "Content Admin",
+      email: "content@insightapex.com",
+      passwordHash: contentAdminPassword,
+      role: "CONTENT_ADMIN",
+      emailVerified: new Date(),
+    },
+  });
+
+  await prisma.user.upsert({
+    where: { email: "student@insightapex.com" },
+    update: { name: "Sarah Johnson", role: Role.STUDENT },
+    create: {
+      name: "Sarah Johnson",
+      email: "student@insightapex.com",
+      passwordHash: studentPassword,
+      role: Role.STUDENT,
+      emailVerified: new Date(),
+      profile: { create: { bio: "ACCA student preparing for PM and FR." } },
+    },
+  });
 
   // Data-driven registration sources (idempotent). New sources can be added
   // later purely by inserting rows — no code changes required.
@@ -594,7 +674,11 @@ async function main() {
     }
   }
 
+  console.log("Seed complete.");
   if (process.env.NODE_ENV !== "production") {
+    console.log("Owner login: admin@insightapex.com / Admin@12345");
+    console.log("Content admin: content@insightapex.com / Content@12345");
+    console.log("Student login: student@insightapex.com / Student@12345");
     console.log("Partner login: partner@insightapex.com / Partner@12345");
     console.log("School logins: nlafaa@insightapex.com / naylinnaung@insightapex.com — Partner@12345");
     console.log("Lecturer logins:");

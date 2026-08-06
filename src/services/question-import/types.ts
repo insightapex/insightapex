@@ -119,10 +119,15 @@ export type ValidatedImportRow = {
   isActive: boolean;
   accessLevel: ImportAccessLevel;
   existingQuestionId: string | null;
-  action: "CREATE" | "UPDATE";
+  /** Import only creates new questions; duplicates are never imported. */
+  action: "CREATE";
 };
 
-export type PreviewRowStatus = "valid" | "invalid" | "duplicate_in_file";
+export type PreviewRowStatus =
+  | "valid"
+  | "invalid"
+  | "duplicate_in_file"
+  | "duplicate_existing";
 
 export type ImportPreviewRow = {
   rowNumber: number;
@@ -134,7 +139,7 @@ export type ImportPreviewRow = {
   questionType: string;
   reviewStatus: string;
   status: PreviewRowStatus;
-  action: "CREATE" | "UPDATE" | "SKIP" | null;
+  action: "CREATE" | "SKIP" | null;
   errorMessage: string | null;
 };
 
@@ -145,8 +150,14 @@ export type ImportPreviewSummary = {
   validRows: number;
   invalidRows: number;
   newQuestions: number;
+  /** Always 0 — re-import of existing IDs is rejected as duplicate. */
   existingToUpdate: number;
+  /** In-file repeated Question IDs. */
   duplicateRows: number;
+  /** Question IDs that already exist in the database. */
+  duplicateExistingRows: number;
+  /** True when any row is a duplicate (blocks confirm import). */
+  hasDuplicates: boolean;
   rows: ImportPreviewRow[];
 };
 

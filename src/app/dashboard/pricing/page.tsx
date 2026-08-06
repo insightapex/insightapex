@@ -261,6 +261,11 @@ export default function PricingPage() {
                     {checkoutLoading === product.id && <Spinner className="h-4 w-4" />}
                     Buy Paper
                   </Button>
+                  {!product.hasStripePrice && (
+                    <p className="mt-2 text-xs text-amber-600">
+                      Stripe Price ID has not been configured for this product.
+                    </p>
+                  )}
                 </CardBody>
               </Card>
             ))}
@@ -293,6 +298,12 @@ export default function PricingPage() {
                     {checkoutLoading === product.id && <Spinner className="h-4 w-4" />}
                     Buy Mock Exam
                   </Button>
+                  {!product.hasStripePrice && (
+                    <p className="mt-2 text-xs text-amber-600">
+                      Stripe Price ID has not been configured for this product. Set it in Admin →
+                      Billing → Products (e.g. product &quot;pm-mock-exam&quot;).
+                    </p>
+                  )}
                 </CardBody>
               </Card>
             ))}

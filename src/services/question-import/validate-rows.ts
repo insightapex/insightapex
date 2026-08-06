@@ -267,7 +267,16 @@ export async function validateImportRows(
       .map((q) => [q.externalQuestionId as string, q.id])
   );
 
-  const seenInFile = new Map<string, number>(); // id → first row number
+  // Count Question IDs in the workbook so *every* repeated row is blocked (not just the 2nd+)
+  const idCountsInFile = new Map<string, number>();
+  const firstRowById = new Map<string, number>();
+  for (const row of params.rows) {
+    const id = norm(row.externalQuestionId);
+    if (!id) continue;
+    idCountsInFile.set(id, (idCountsInFile.get(id) ?? 0) + 1);
+    if (!firstRowById.has(id)) firstRowById.set(id, row.rowNumber);
+  }
+
   const previewRows: ImportPreviewRow[] = [];
   const validRows: ValidatedImportRow[] = [];
 
@@ -284,13 +293,25 @@ export async function validateImportRows(
     if (!norm(row.questionText)) errors.push("Question text is required");
     if (!paperCode) errors.push("Subject (Paper code) is required");
 
-    if (externalQuestionId) {
-      const first = seenInFile.get(externalQuestionId);
-      if (first != null) {
-        errors.push(`Duplicate question ID in file (first seen on row ${first})`);
-      } else {
-        seenInFile.set(externalQuestionId, row.rowNumber);
-      }
+    const existingQuestionId = externalQuestionId
+      ? existingByExternal.get(externalQuestionId) ?? null
+      : null;
+
+    const fileDupCount = externalQuestionId
+      ? idCountsInFile.get(externalQuestionId) ?? 0
+      : 0;
+    const isFileDup = fileDupCount > 1;
+    if (isFileDup && externalQuestionId) {
+      const first = firstRowById.get(externalQuestionId) ?? row.rowNumber;
+      errors.push(
+        `Duplicate question ID in file (ID appears ${fileDupCount} times; first on row ${first}). This file is duplicated.`
+      );
+    }
+
+    if (existingQuestionId && externalQuestionId) {
+      errors.push(
+        `Duplicate: question ID "${externalQuestionId}" already exists in the system and will not be imported.`
+      );
     }
 
     const paper = paperByCode.get(paperCode);
@@ -373,32 +394,16 @@ export async function validateImportRows(
       }
     }
 
-    const isFileDup =
-      externalQuestionId &&
-      seenInFile.get(externalQuestionId) !== row.rowNumber &&
-      seenInFile.has(externalQuestionId);
-
-    // Re-check duplicate message already added when first seen; for later rows mark duplicate_in_file
-    const duplicateInFile =
-      Boolean(externalQuestionId) &&
-      errors.some((e) => e.startsWith("Duplicate question ID in file"));
-
-    const existingQuestionId = externalQuestionId
-      ? existingByExternal.get(externalQuestionId) ?? null
-      : null;
-
-    const status: ImportPreviewRow["status"] = duplicateInFile
+    // Priority: in-file dup → already-in-DB → other validation errors → valid
+    const status: ImportPreviewRow["status"] = isFileDup
       ? "duplicate_in_file"
-      : errors.length
-        ? "invalid"
-        : "valid";
+      : existingQuestionId
+        ? "duplicate_existing"
+        : errors.length
+          ? "invalid"
+          : "valid";
 
-    const action: ImportPreviewRow["action"] =
-      status !== "valid"
-        ? "SKIP"
-        : existingQuestionId
-          ? "UPDATE"
-          : "CREATE";
+    const action: ImportPreviewRow["action"] = status === "valid" ? "CREATE" : "SKIP";
 
     previewRows.push({
       rowNumber: row.rowNumber,
@@ -414,6 +419,7 @@ export async function validateImportRows(
       errorMessage: errors.length ? errors.join("; ") : null,
     });
 
+    // Only brand-new, non-duplicate IDs may be imported
     if (status === "valid" && questionType && difficulty && review && accessLevel) {
       validRows.push({
         sheetName: row.sheetName,
@@ -439,13 +445,16 @@ export async function validateImportRows(
         reviewStatus: review.reviewStatus,
         isActive: review.isActive,
         accessLevel,
-        existingQuestionId,
-        action: existingQuestionId ? "UPDATE" : "CREATE",
+        existingQuestionId: null,
+        action: "CREATE",
       });
     }
-
-    void isFileDup;
   }
+
+  const duplicateRows = previewRows.filter((r) => r.status === "duplicate_in_file").length;
+  const duplicateExistingRows = previewRows.filter(
+    (r) => r.status === "duplicate_existing"
+  ).length;
 
   const summary: ImportPreviewSummary = {
     fileName: params.fileName,
@@ -453,9 +462,11 @@ export async function validateImportRows(
     totalRows: params.rows.length,
     validRows: previewRows.filter((r) => r.status === "valid").length,
     invalidRows: previewRows.filter((r) => r.status === "invalid").length,
-    newQuestions: validRows.filter((r) => r.action === "CREATE").length,
-    existingToUpdate: validRows.filter((r) => r.action === "UPDATE").length,
-    duplicateRows: previewRows.filter((r) => r.status === "duplicate_in_file").length,
+    newQuestions: validRows.length,
+    existingToUpdate: 0,
+    duplicateRows,
+    duplicateExistingRows,
+    hasDuplicates: duplicateRows > 0 || duplicateExistingRows > 0,
     rows: previewRows,
   };
 

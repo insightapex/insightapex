@@ -46,9 +46,12 @@
     @apply mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8;
   }
 
-  /* Student dashboard: centred content with side margins on wide screens */
+  /* Student dashboard: content ≈ 80% of main column (≈10% + 10% side space) */
   .dashboard-page-container {
-    @apply mx-auto w-full min-w-0 max-w-[90rem] px-4 py-6 sm:px-6 sm:py-8 lg:px-8;
+    @apply mx-auto w-full min-w-0 py-5 sm:py-6;
+    /* 10% each side of the main content area; floor for small screens */
+    padding-left: max(1rem, 10%);
+    padding-right: max(1rem, 10%);
   }
 
   /* Admin / Partner portals — wider content, still padded */

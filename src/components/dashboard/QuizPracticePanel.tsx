@@ -49,6 +49,8 @@ interface QuizPracticePanelProps {
   submitError?: string | null;
   onTimerPausedChange?: (paused: boolean) => void;
   features?: QuizFeatureSettings;
+  /** Last-question primary button label (default: Submit Quiz) */
+  finalSubmitLabel?: string;
 }
 
 function IconFlag({ className }: { className?: string }) {
@@ -119,6 +121,7 @@ export function QuizPracticePanel({
   submitError,
   onTimerPausedChange,
   features = {},
+  finalSubmitLabel = "Submit Quiz",
 }: QuizPracticePanelProps) {
   const {
     allowPreviousQuestion = true,
@@ -215,7 +218,7 @@ export function QuizPracticePanel({
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto w-full max-w-none space-y-6">
       {submitError && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{submitError}</div>
       )}
@@ -444,7 +447,7 @@ export function QuizPracticePanel({
             </div>
 
             <Button onClick={handleNext} className="w-full gap-2 lg:w-auto">
-              {isLast ? "Submit Quiz" : "Next"}
+              {isLast ? finalSubmitLabel : "Next"}
               {!isLast && <IconArrowRight className="h-4 w-4" />}
             </Button>
           </div>
