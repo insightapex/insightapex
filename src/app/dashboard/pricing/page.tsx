@@ -30,6 +30,8 @@ interface Product {
   type: string;
   priceCents: number | null;
   currency: string | null;
+  paperId?: string | null;
+  mockExamId?: string | null;
   paper?: { code: string; title: string } | null;
   mockExam?: { title: string } | null;
   hasStripePrice: boolean;
@@ -39,6 +41,9 @@ export default function PricingPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [currentPlanId, setCurrentPlanId] = useState<string | null>(null);
+  const [ownedProductIds, setOwnedProductIds] = useState<Set<string>>(new Set());
+  const [ownedPaperIds, setOwnedPaperIds] = useState<Set<string>>(new Set());
+  const [ownedMockExamIds, setOwnedMockExamIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +64,9 @@ export default function PricingPage() {
         setPlans(Array.isArray(plansData) ? plansData : []);
         setProducts(Array.isArray(productsData) ? productsData : []);
         setCurrentPlanId(dashboardData.currentPlan?.id ?? null);
+        setOwnedProductIds(new Set(dashboardData.ownedProductIds ?? []));
+        setOwnedPaperIds(new Set(dashboardData.ownedPaperIds ?? []));
+        setOwnedMockExamIds(new Set(dashboardData.ownedMockExamIds ?? []));
       });
     }
 
@@ -114,6 +122,13 @@ export default function PricingPage() {
       setError(err instanceof Error ? err.message : "Checkout failed");
       setCheckoutLoading(null);
     }
+  }
+
+  function isProductOwned(product: Product) {
+    if (ownedProductIds.has(product.id)) return true;
+    if (product.paperId && ownedPaperIds.has(product.paperId)) return true;
+    if (product.mockExamId && ownedMockExamIds.has(product.mockExamId)) return true;
+    return false;
   }
 
   const subscriptionPlans = plans.filter((p) => p.accessType !== "FREE");
@@ -240,35 +255,65 @@ export default function PricingPage() {
         <section>
           <h2 className="text-lg font-semibold text-ink-900">One-time paper purchases</h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {paperProducts.map((product) => (
-              <Card key={product.id}>
-                <CardBody>
-                  <Badge tone="brand">Paper</Badge>
-                  <h3 className="mt-3 font-semibold text-ink-900">{product.name}</h3>
-                  {product.paper && (
-                    <p className="text-sm text-brand-600">{product.paper.code} — {product.paper.title}</p>
-                  )}
-                  <p className="mt-2 text-xl font-bold text-ink-900">
-                    {formatPrice(product.priceCents ?? 0, product.currency ?? "GBP")}
-                  </p>
-                  <p className="mt-2 text-sm text-slate-500">{product.description}</p>
-                  <Button
-                    className="mt-4 w-full"
-                    variant="outline"
-                    disabled={!product.hasStripePrice || checkoutLoading === product.id}
-                    onClick={() => checkoutProduct(product.id, "paper")}
-                  >
-                    {checkoutLoading === product.id && <Spinner className="h-4 w-4" />}
-                    Buy Paper
-                  </Button>
-                  {!product.hasStripePrice && (
-                    <p className="mt-2 text-xs text-amber-600">
-                      Stripe Price ID has not been configured for this product.
+            {paperProducts.map((product) => {
+              const owned = isProductOwned(product);
+              return (
+                <Card
+                  key={product.id}
+                  className={owned ? "border-emerald-300 ring-2 ring-emerald-100" : undefined}
+                >
+                  <CardBody>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="brand">Paper</Badge>
+                      {owned && <Badge tone="success">Owned</Badge>}
+                    </div>
+                    <h3 className="mt-3 font-semibold text-ink-900">{product.name}</h3>
+                    {product.paper && (
+                      <p className="text-sm text-brand-600">
+                        {product.paper.code} — {product.paper.title}
+                      </p>
+                    )}
+                    <p className="mt-2 text-xl font-bold text-ink-900">
+                      {formatPrice(product.priceCents ?? 0, product.currency ?? "GBP")}
                     </p>
-                  )}
-                </CardBody>
-              </Card>
-            ))}
+                    <p className="mt-2 text-sm text-slate-500">{product.description}</p>
+                    {owned ? (
+                      <>
+                        <Button variant="outline" className="mt-4 w-full" disabled>
+                          Already purchased
+                        </Button>
+                        <p className="mt-2 text-center text-xs text-emerald-700">
+                          This paper pack is on your account.{" "}
+                          <Link
+                            href="/dashboard/billing"
+                            className="font-medium text-brand-600 hover:underline"
+                          >
+                            View billing
+                          </Link>
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          className="mt-4 w-full"
+                          variant="outline"
+                          disabled={!product.hasStripePrice || checkoutLoading === product.id}
+                          onClick={() => checkoutProduct(product.id, "paper")}
+                        >
+                          {checkoutLoading === product.id && <Spinner className="h-4 w-4" />}
+                          Buy Paper
+                        </Button>
+                        {!product.hasStripePrice && (
+                          <p className="mt-2 text-xs text-amber-600">
+                            Stripe Price ID has not been configured for this product.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </CardBody>
+                </Card>
+              );
+            })}
           </div>
         </section>
       )}
@@ -277,36 +322,64 @@ export default function PricingPage() {
         <section>
           <h2 className="text-lg font-semibold text-ink-900">One-time mock exam purchases</h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {mockExamProducts.map((product) => (
-              <Card key={product.id}>
-                <CardBody>
-                  <Badge tone="warning">Mock Exam</Badge>
-                  <h3 className="mt-3 font-semibold text-ink-900">{product.name}</h3>
-                  {product.mockExam && (
-                    <p className="text-sm text-slate-500">{product.mockExam.title}</p>
-                  )}
-                  <p className="mt-2 text-xl font-bold text-ink-900">
-                    {formatPrice(product.priceCents ?? 0, product.currency ?? "GBP")}
-                  </p>
-                  <p className="mt-2 text-sm text-slate-500">{product.description}</p>
-                  <Button
-                    className="mt-4 w-full"
-                    variant="outline"
-                    disabled={!product.hasStripePrice || checkoutLoading === product.id}
-                    onClick={() => checkoutProduct(product.id, "mock-exam")}
-                  >
-                    {checkoutLoading === product.id && <Spinner className="h-4 w-4" />}
-                    Buy Mock Exam
-                  </Button>
-                  {!product.hasStripePrice && (
-                    <p className="mt-2 text-xs text-amber-600">
-                      Stripe Price ID has not been configured for this product. Set it in Admin →
-                      Billing → Products (e.g. product &quot;pm-mock-exam&quot;).
+            {mockExamProducts.map((product) => {
+              const owned = isProductOwned(product);
+              return (
+                <Card
+                  key={product.id}
+                  className={owned ? "border-emerald-300 ring-2 ring-emerald-100" : undefined}
+                >
+                  <CardBody>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone="warning">Mock Exam</Badge>
+                      {owned && <Badge tone="success">Owned</Badge>}
+                    </div>
+                    <h3 className="mt-3 font-semibold text-ink-900">{product.name}</h3>
+                    {product.mockExam && (
+                      <p className="text-sm text-slate-500">{product.mockExam.title}</p>
+                    )}
+                    <p className="mt-2 text-xl font-bold text-ink-900">
+                      {formatPrice(product.priceCents ?? 0, product.currency ?? "GBP")}
                     </p>
-                  )}
-                </CardBody>
-              </Card>
-            ))}
+                    <p className="mt-2 text-sm text-slate-500">{product.description}</p>
+                    {owned ? (
+                      <>
+                        <Button variant="outline" className="mt-4 w-full" disabled>
+                          Already purchased
+                        </Button>
+                        <p className="mt-2 text-center text-xs text-emerald-700">
+                          This mock exam is on your account.{" "}
+                          <Link
+                            href="/dashboard/billing"
+                            className="font-medium text-brand-600 hover:underline"
+                          >
+                            View billing
+                          </Link>
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          className="mt-4 w-full"
+                          variant="outline"
+                          disabled={!product.hasStripePrice || checkoutLoading === product.id}
+                          onClick={() => checkoutProduct(product.id, "mock-exam")}
+                        >
+                          {checkoutLoading === product.id && <Spinner className="h-4 w-4" />}
+                          Buy Mock Exam
+                        </Button>
+                        {!product.hasStripePrice && (
+                          <p className="mt-2 text-xs text-amber-600">
+                            Stripe Price ID has not been configured for this product. Set it in Admin →
+                            Billing → Products (e.g. product &quot;pm-mock-exam&quot;).
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </CardBody>
+                </Card>
+              );
+            })}
           </div>
         </section>
       )}

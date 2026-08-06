@@ -97,6 +97,25 @@ export async function createProductCheckout(
     throw new Error(STRIPE_PRICE_NOT_CONFIGURED);
   }
 
+  const alreadyOwned = await prisma.purchase.findFirst({
+    where: {
+      userId,
+      status: "COMPLETED",
+      OR: [
+        { productId: product.id },
+        ...(product.paperId ? [{ paperId: product.paperId }] : []),
+        ...(product.mockExamId ? [{ mockExamId: product.mockExamId }] : []),
+      ],
+    },
+  });
+  if (alreadyOwned) {
+    throw new Error(
+      product.type === "PAPER"
+        ? "You already own this paper pack."
+        : "You already own this mock exam."
+    );
+  }
+
   const stripe = getStripe();
   const appUrl = getAppUrl();
 

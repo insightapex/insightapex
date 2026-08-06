@@ -31,6 +31,17 @@ export async function GET() {
 
   const freePlan = await prisma.plan.findFirst({ where: { accessType: "FREE" } });
 
+  // Unique owned product / paper / mock IDs so pricing UI can hide "Buy" after purchase.
+  const ownedProductIds = [
+    ...new Set(purchases.map((p) => p.productId).filter((id): id is string => Boolean(id))),
+  ];
+  const ownedPaperIds = [
+    ...new Set(purchases.map((p) => p.paperId).filter((id): id is string => Boolean(id))),
+  ];
+  const ownedMockExamIds = [
+    ...new Set(purchases.map((p) => p.mockExamId).filter((id): id is string => Boolean(id))),
+  ];
+
   return NextResponse.json({
     currentPlan: subscription?.plan ?? freePlan ?? null,
     subscription: subscription
@@ -42,8 +53,12 @@ export async function GET() {
           endsAt: subscription.endsAt,
         }
       : null,
+    ownedProductIds,
+    ownedPaperIds,
+    ownedMockExamIds,
     purchasedPapers: purchases.filter((p) => p.paperId).map((p) => ({
       id: p.id,
+      productId: p.productId,
       paper: p.paper,
       purchasedAt: p.createdAt,
       amountCents: p.amountCents,
@@ -51,6 +66,7 @@ export async function GET() {
     })),
     purchasedMockExams: purchases.filter((p) => p.mockExamId).map((p) => ({
       id: p.id,
+      productId: p.productId,
       mockExam: p.mockExam,
       purchasedAt: p.createdAt,
       amountCents: p.amountCents,
