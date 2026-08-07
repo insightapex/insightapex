@@ -12,11 +12,19 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "restore:old-local:dry": "tsx prisma/restore-old-local-data.ts --dry-run",
+    "restore:old-local": "tsx prisma/restore-old-local-data.ts",
+    "restore:old-results:dry": "tsx prisma/restore-old-local-results.ts --dry-run",
+    "restore:old-results": "tsx prisma/restore-old-local-results.ts",
+    "demo:results:dry": "tsx prisma/create-local-demo-results.ts --dry-run",
+    "demo:results:create": "tsx prisma/create-local-demo-results.ts",
+    "demo:results:remove": "tsx prisma/create-local-demo-results.ts --remove"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
     "bcryptjs": "^2.4.3",
+    "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "next": "14.2.5",
     "next-auth": "^4.24.7",

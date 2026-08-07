@@ -1,5 +1,6 @@
 .env
 .env.local
+.env.localrestore
 .next/
 node_modules/
 dist/
